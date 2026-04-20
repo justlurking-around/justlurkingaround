@@ -7,9 +7,10 @@
     "ai-scanner": "./src/cli/index.js"
   },
   "scripts": {
-    "start": "node src/index.js",
+    "start": "node src/cli/index.js",
     "worker": "node src/worker/index.js",
     "cli": "node src/cli/index.js",
+    "menu": "node src/cli/index.js",
     "setup-db": "node src/db/migrate.js"
   },
   "keywords": [
