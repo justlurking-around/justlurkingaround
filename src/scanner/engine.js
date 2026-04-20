@@ -19,11 +19,15 @@ const { shannonEntropy, isHighEntropy } = require('../utils/entropy');
 const { fileHash } = require('../utils/hash');
 const { shouldSkipFile, isDummyValue, isHighValueFile, isNoisyValue } = require('../filters/false-positive');
 const { PATTERNS } = require('./patterns');
+const { CREDENTIAL_PATTERNS } = require('./credential-patterns');
+
+// Combined pattern list — API keys + service credentials
+const ALL_PATTERNS = [...PATTERNS, ...CREDENTIAL_PATTERNS];
 const config = require('../../config/default');
 const logger = require('../utils/logger');
 
 // Pre-compile all pattern regexes for entropy de-dup check (perf fix)
-const _compiledPatterns = PATTERNS.map(p => {
+const _compiledPatterns = ALL_PATTERNS.map(p => {
   try { return new RegExp(p.regex.source, 'i'); } catch { return null; }
 }).filter(Boolean);
 
@@ -80,7 +84,6 @@ class ScannerEngine {
     await Promise.all(
       ordered.map(file =>
         this.fileLimit(async () => {
-          // Stop scanning files once cap is hit
           if (findings.length >= maxFindings) return;
           try {
             const result = await this._scanFile(repoName, file);
@@ -160,7 +163,7 @@ class ScannerEngine {
     }
 
     const findings = [];
-    for (const pattern of PATTERNS) {
+    for (const pattern of ALL_PATTERNS) {
       try {
         findings.push(...this._matchPattern(content, pattern, file.path));
       } catch (err) {

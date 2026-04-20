@@ -216,6 +216,164 @@ const GUIDES = {
     impact: 'Repository and CI/CD access',
   },
 
+  mysql: {
+    name: 'MySQL Database',
+    revokeUrl: null,
+    steps: [
+      '1. Connect to MySQL as admin: mysql -u root -p',
+      "2. Run: ALTER USER 'leaked_user'@'%' IDENTIFIED BY 'new_strong_password';",
+      '3. Run: FLUSH PRIVILEGES;',
+      '4. Update all apps using the old credentials',
+      '5. Check MySQL audit log for unauthorized queries',
+    ],
+    severity: 'CRITICAL',
+    impact: 'Full database read/write/delete access',
+  },
+
+  postgres: {
+    name: 'PostgreSQL Database',
+    revokeUrl: null,
+    steps: [
+      "1. Run as superuser: ALTER ROLE leaked_user PASSWORD 'new_strong_password';",
+      '2. Update all applications with new credentials',
+      '3. Check pg_stat_activity for suspicious active sessions',
+      "4. Run: SELECT * FROM pg_stat_activity WHERE usename='leaked_user';",
+    ],
+    severity: 'CRITICAL',
+    impact: 'Full database access — data theft, deletion, ransomware risk',
+  },
+
+  smtp: {
+    name: 'SMTP / Email Service',
+    revokeUrl: null,
+    steps: [
+      '1. Log in to your email provider admin panel',
+      '2. Change the password for the leaked email account immediately',
+      '3. Enable 2FA on the account',
+      '4. Check sent items for unauthorized emails (spam/phishing)',
+      '5. Review email forwarding rules for suspicious additions',
+    ],
+    severity: 'HIGH',
+    impact: 'Mass spam sending, phishing campaigns, reputation damage',
+  },
+
+  ssh: {
+    name: 'SSH Private Key',
+    revokeUrl: null,
+    steps: [
+      '1. Immediately remove the public key from all ~/.ssh/authorized_keys',
+      '2. Generate a new key pair: ssh-keygen -t ed25519',
+      '3. Add the new public key to authorized_keys',
+      '4. Check auth.log / /var/log/secure for unauthorized SSH logins',
+      '5. Run: last -i to see recent logins',
+    ],
+    severity: 'CRITICAL',
+    impact: 'Full server access — root compromise possible',
+  },
+
+  ssl: {
+    name: 'SSL/TLS Private Key',
+    revokeUrl: 'https://support.comodoca.com/articles/Knowledge/Certificate-Revocation',
+    steps: [
+      '1. Request certificate revocation from your CA immediately',
+      '2. Generate a new private key: openssl genrsa -out new.key 4096',
+      '3. Submit a new CSR to your CA',
+      '4. Replace the certificate on all servers',
+      '5. Check for impersonation attacks using the old cert',
+    ],
+    severity: 'CRITICAL',
+    impact: 'HTTPS impersonation, man-in-the-middle attacks',
+  },
+
+  jwt: {
+    name: 'JWT Signing Secret',
+    revokeUrl: null,
+    steps: [
+      '1. Rotate the JWT secret immediately (all existing tokens become invalid)',
+      '2. Force all users to re-authenticate',
+      '3. Check for forged tokens in your auth logs',
+      '4. Use a randomly generated secret of at least 256 bits',
+    ],
+    severity: 'HIGH',
+    impact: 'Anyone can forge authentication tokens — full account takeover',
+  },
+
+  database: {
+    name: 'Database Credentials',
+    revokeUrl: null,
+    steps: [
+      '1. Change the database user password immediately',
+      '2. Update all connection strings in your apps',
+      '3. Review database audit logs for unauthorized access',
+      '4. Check for data exfiltration in access logs',
+    ],
+    severity: 'CRITICAL',
+    impact: 'Full database access — data theft and deletion',
+  },
+
+  kubernetes: {
+    name: 'Kubernetes Secret',
+    revokeUrl: null,
+    steps: [
+      '1. Run: kubectl delete secret <secret-name> -n <namespace>',
+      '2. Recreate with new values: kubectl create secret generic ...',
+      '3. Restart affected deployments: kubectl rollout restart deployment/<name>',
+      '4. Check kubectl audit logs for unauthorized API calls',
+    ],
+    severity: 'CRITICAL',
+    impact: 'Cluster credential exposure — all workloads at risk',
+  },
+
+  docker: {
+    name: 'Docker Registry Credentials',
+    revokeUrl: 'https://hub.docker.com/settings/security',
+    steps: [
+      '1. Go to hub.docker.com/settings/security',
+      '2. Revoke the access token or change your password',
+      '3. Remove the auth entry from ~/.docker/config.json',
+      '4. Check for unauthorized image pushes in your registry',
+    ],
+    severity: 'HIGH',
+    impact: 'Malicious image injection into your registry',
+  },
+
+  apache: {
+    name: '.htpasswd Credentials',
+    revokeUrl: null,
+    steps: [
+      '1. Run: htpasswd -B /path/to/.htpasswd username',
+      '2. Update the .htpasswd file with a new hashed password',
+      '3. Review access logs for unauthorized access',
+    ],
+    severity: 'MEDIUM',
+    impact: 'Unauthorized access to password-protected web content',
+  },
+
+  http: {
+    name: 'HTTP Basic Auth',
+    revokeUrl: null,
+    steps: [
+      '1. Change the credentials on the protected endpoint',
+      '2. Rotate the Basic auth password immediately',
+      '3. Consider switching to token-based auth (Bearer)',
+    ],
+    severity: 'HIGH',
+    impact: 'Unauthorized API or endpoint access',
+  },
+
+  ftp: {
+    name: 'FTP/SFTP Credentials',
+    revokeUrl: null,
+    steps: [
+      '1. Log in to your hosting panel or server',
+      '2. Change the FTP/SFTP user password',
+      '3. Check FTP access logs for unauthorized file uploads',
+      '4. Scan the server for malicious files (web shells)',
+    ],
+    severity: 'HIGH',
+    impact: 'Server file access — malware/web shell upload possible',
+  },
+
   generic: {
     name: 'Unknown Provider',
     revokeUrl: null,

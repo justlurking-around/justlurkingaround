@@ -19,6 +19,13 @@
  */
 
 const { validateFinding, RESULTS } = require('./index');
+const { validateCredential } = require('./credential-validator');
+const { CREDENTIAL_PATTERNS } = require('../scanner/credential-patterns');
+
+// Credential pattern IDs that have live validators
+const CREDENTIAL_PATTERN_IDS = new Set(
+  CREDENTIAL_PATTERNS.filter(p => p.canValidate).map(p => p.id)
+);
 const { sha256 } = require('../utils/hash');
 const logger = require('../utils/logger');
 
@@ -109,8 +116,13 @@ class StreamValidator {
 
     // ── High-value named pattern — validate immediately ─────────────────────
     if (HIGH_VALUE_PATTERNS.has(finding.patternId)) {
-      // Non-blocking: don't await so scanner continues scanning other files
       this._validateNow(finding);
+      return;
+    }
+
+    // ── Credential pattern (DB, SMTP, private key, etc.) ─────────────────────
+    if (CREDENTIAL_PATTERN_IDS.has(finding.patternId)) {
+      this._validateCredentialNow(finding);
       return;
     }
 
@@ -140,10 +152,40 @@ class StreamValidator {
   // ── Internal ──────────────────────────────────────────────────────────────
 
   _validateNow(finding, context = {}) {
-    // Fire-and-forget — scanner doesn't wait
     this._doValidate(finding, context).catch(err => {
       logger.debug(`[StreamValidator] Error: ${err.message}`);
     });
+  }
+
+  _validateCredentialNow(finding) {
+    this._doCredentialValidate(finding).catch(err => {
+      logger.debug(`[StreamValidator] Credential error: ${err.message}`);
+    });
+  }
+
+  async _doCredentialValidate(finding) {
+    while (this._inFlight >= this._maxInFlight) {
+      await new Promise(r => setTimeout(r, 100));
+    }
+    this._inFlight++;
+    let result;
+    try {
+      result = await validateCredential(finding);
+    } catch (err) {
+      result = { result: RESULTS.ERROR, detail: err.message };
+    } finally {
+      this._inFlight--;
+    }
+    const enriched = { ...finding, validationResult: result.result, validationDetail: result.detail };
+    if (result.result === RESULTS.VALID) {
+      logger.warn(
+        `[CRED VALID] ${finding.provider} | ${finding.patternName} | ` +
+        `${finding.filePath} | ${result.detail}`
+      );
+      try { await this.onValid(enriched, result); } catch {}
+    }
+    try { this.onFinding(enriched, result); } catch {}
+    return enriched;
   }
 
   async _doValidate(finding, context = {}) {
