@@ -79,14 +79,11 @@ scan
     if (opts.token) { store.set('githubToken', opts.token); applyToEnv(); }
     if (!opts.validate) process.env.VALIDATE_SECRETS = 'false';
 
-    const repoName = url
-      .replace(/https?:\/\/github\.com\//, '')
-      .replace(/\.git$/, '').replace(/\/$/, '');
-
-    if (!repoName.includes('/')) {
-      console.error(chalk.red(`  Invalid URL: ${url}`));
-      process.exit(1);
-    }
+    const { sanitizeGitHubUrl, sanitizeRepoName } = require('../utils/security');
+    const safeUrl  = sanitizeGitHubUrl(url);
+    if (!safeUrl) { console.error(chalk.red('  Invalid GitHub URL')); process.exit(1); }
+    const repoName = sanitizeRepoName(safeUrl.replace('https://github.com/', ''));
+    if (!repoName)  { console.error(chalk.red('  Invalid repo name')); process.exit(1); }
 
     const spinner = ora(`Scanning ${chalk.cyan(repoName)}...`).start();
     try {

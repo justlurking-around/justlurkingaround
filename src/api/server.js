@@ -15,9 +15,10 @@
  */
 
 const express = require('express');
-const path = require('path');
+const path    = require('path');
 const { getDB } = require('../db');
-const logger = require('../utils/logger');
+const logger  = require('../utils/logger');
+const { RateLimiter, sanitizeRepoName, sanitizeGitHubUrl, sanitizeForLog } = require('../utils/security');
 
 class APIServer {
   constructor(port = 3000) {
@@ -29,12 +30,23 @@ class APIServer {
   }
 
   _setupMiddleware() {
-    this.app.use(express.json());
+    // Rate limiter: 120 requests per minute per IP
+    this._rateLimiter = new RateLimiter({ windowMs: 60_000, max: 120 });
+
+    this.app.use(express.json({ limit: '100kb' })); // body size limit
     this.app.use((req, res, next) => {
-      res.setHeader('X-Powered-By', 'ai-secret-scanner');
-      res.setHeader('Access-Control-Allow-Origin', '*');
+      // Security headers
+      res.setHeader('X-Powered-By',             'ai-secret-scanner');
+      res.setHeader('X-Content-Type-Options',    'nosniff');
+      res.setHeader('X-Frame-Options',           'DENY');
+      res.setHeader('X-XSS-Protection',          '1; mode=block');
+      res.setHeader('Referrer-Policy',           'no-referrer');
+      res.setHeader('Access-Control-Allow-Origin','*');
       next();
     });
+
+    // Apply rate limiting to /api/* routes only
+    this.app.use('/api/', this._rateLimiter.middleware());
   }
 
   _setupRoutes() {
@@ -122,9 +134,7 @@ class APIServer {
         .replace(/https?:\/\/github\.com\//, '')
         .replace(/\.git$/, '').replace(/\/$/, '');
 
-      if (!repoName.includes('/')) {
-        return res.status(400).json({ error: 'Invalid GitHub repo URL' });
-      }
+
 
       // Async — fire and forget, push updates via SSE
       res.json({ success: true, message: `Scan queued for ${repoName}`, repoName });

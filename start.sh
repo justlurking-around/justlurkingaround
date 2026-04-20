@@ -32,12 +32,15 @@ if [ "${DISABLE_HEAL:-false}" != "true" ]; then
     rm -f "$HEAL_PID_FILE"
   fi
 
-  nohup node scripts/heal.js >> logs/heal.log 2>&1 &
+  # DAEMON mode: no --once flag = stays alive, interval fires every 30min
+  # AUTO_FIX_DEPS=true  = npm audit fix + patch updates auto-committed
+  # WATCH_PROCESS=false = we don't restart the scanner from here
+  AUTO_FIX_DEPS=true WATCH_PROCESS=false nohup node scripts/heal.js >> logs/heal.log 2>&1 &
   HEAL_PID=$!
   echo $HEAL_PID > "$HEAL_PID_FILE"
   disown $HEAL_PID
-  echo "  [OK] Self-heal daemon started in background (PID=$HEAL_PID)"
-  echo "       View heal log: tail -f logs/heal.log"
+  echo "  [OK] Self-heal daemon started (PID=$HEAL_PID, cycle=30min)"
+  echo "       Logs: tail -f logs/heal.log"
 fi
 
 # ─── Launch the scanner ───────────────────────────────────────────────────────

@@ -17,8 +17,9 @@
 
 const axios = require('axios');
 const axiosRetry = require('axios-retry').default || require('axios-retry');
-const config = require('../../config/default');
-const logger = require('../utils/logger');
+const config   = require('../../config/default');
+const logger   = require('../utils/logger');
+const { sanitizeProvider, sanitizeForLog, isSafeUrl } = require('../utils/security');
 
 const RESULTS = {
   VALID:   'VALID',
@@ -309,8 +310,8 @@ async function validateFinding(finding, context = {}) {
     return { result: RESULTS.SKIPPED, detail: 'Validation disabled' };
   }
 
-  // FIX: never log rawValue
-  const provider = finding.provider || 'unknown';
+  // Sanitize provider — prevents arbitrary function dispatch via crafted input
+  const provider = sanitizeProvider(finding.provider || 'unknown');
   const fn = validators[provider] || validators.unknown;
 
   try {

@@ -533,16 +533,18 @@ async function main() {
   // Start worker if watchdog mode
   if (CFG.watchProcess) startWorker();
 
-  // Run cycle immediately then on interval
-  await cycle();
-  const timer = setInterval(cycle, CFG.cycleMs);
-  timer.unref(); // don't prevent process exit if nothing else running
-
-  // Keep alive only if in watchdog mode or interval > 0
-  if (!CFG.watchProcess) {
-    log('info', 'One-shot heal complete.');
+  // One-shot mode (--once flag) — run and exit
+  if (process.argv.includes('--once')) {
+    await cycle();
+    log('info', 'One-shot complete.');
     process.exit(0);
   }
+
+  // Daemon mode — run cycle immediately then keep alive on interval
+  await cycle();
+  // BUG FIX: do NOT call unref() — the interval must keep the process alive
+  // so the 30-min autonomous cycle actually fires
+  setInterval(cycle, CFG.cycleMs);
 
   log('info', `Heal daemon running. Next cycle in ${CFG.cycleMs / 60_000}min. Ctrl+C to stop.`);
 }
