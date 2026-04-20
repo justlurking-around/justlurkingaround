@@ -28,6 +28,7 @@ const GitHubSearchScanner= require('../search/github-search');
 const { annotatePairs }  = require('../scanner/pair-matcher');
 const { annotateWithContext } = require('../scanner/context-analyzer');
 const { validateFinding, RESULTS } = require('../validator');
+const StreamValidator    = require('../validator/stream-validator');
 const { getDB }          = require('../db');
 const { getClient }      = require('../utils/github-client');
 const { getNotifier }    = require('../notifications');
@@ -188,7 +189,7 @@ class Worker {
     }
   }
 
-  // ── Repo Processor — full deep scan ──────────────────────────────────────
+  // ── Repo Processor — streaming validation ───────────────────────────────
 
   async _processRepo(item) {
     logger.info(`[Worker] Processing: ${item.repoName} [AI=${item.isAI}, conf=${item.aiConfidence}, src=${item.fromSearch ? 'search' : 'events'}]`);
@@ -199,11 +200,42 @@ class Worker {
       aiSignals: item.aiSignals || {}, priority: item.priority?.label || 'unknown'
     });
 
-    // ── Layer 1: Surface scan (current HEAD files) ──────────────────────────
+    // ── Set up streaming validator (fires validation mid-scan on hits) ──────
+    const streamValidator = new StreamValidator({
+      onValid: async (finding, validation) => {
+        // VALID secret found mid-scan — alert immediately, don't wait for scan end
+        this.stats.valid++;
+        const record = this._buildRecord(item, finding, validation);
+        await this.db.insertFinding(record);
+        logger.warn(
+          `!! LIVE SECRET FOUND! Repo=${item.repoName} ` +
+          `Provider=${finding.provider} Pattern=${finding.patternName} ` +
+          `File=${finding.filePath}` +
+          (finding.isHistorical ? ' [HISTORICAL]' : '') +
+          ` | ${validation.detail}`
+        );
+        await this.notifier.alert({ ...record, repoUrl: item.repoUrl }, true);
+        if (this.apiServer) this.apiServer.pushFinding(record);
+      },
+      onFinding: (finding, validation) => {
+        if (this.apiServer) this.apiServer.pushFinding(
+          this._buildRecord(item, finding, validation)
+        );
+      }
+    });
+
+    streamValidator.beginRepo(item.repoName);
+
+    // ── Layer 1: Surface scan — findings streamed to validator as found ──────
     let surfaceFindings = await this.scanner.scanRepo(item);
     this.stats.scanned++;
 
-    // ── Layer 2: Deep git history scan ─────────────────────────────────────
+    // Stream surface findings through validator immediately
+    for (const f of surfaceFindings) {
+      await streamValidator.notifyFinding({ ...f, repoName: item.repoName });
+    }
+
+    // ── Layer 2: Deep git history scan (for AI / active / has-surface-hits) ─
     let historyFindings = [];
     const shouldDeepScan = item.isAI ||
       item.aiConfidence > 30 ||
@@ -214,21 +246,27 @@ class Worker {
       logger.info(`[Worker] Starting deep history scan: ${item.repoName}`);
       historyFindings = await this.histScanner.deepScan(item.repoName);
       this.stats.historical += historyFindings.length;
+      for (const f of historyFindings) {
+        await streamValidator.notifyFinding({ ...f, repoName: item.repoName, isHistorical: true });
+      }
     }
 
-    // ── Merge and enrich all findings ──────────────────────────────────────
+    // ── Drain batch queue (entropy + low-priority findings) ─────────────────
+    const batchResults = await streamValidator.drainBatch();
+
+    // ── Merge all findings for reporting ────────────────────────────────────
     const allFindings = [
-      ...surfaceFindings.map(f => ({ ...f, repoName: item.repoName, repoUrl: item.repoUrl })),
-      ...historyFindings.map(f => ({ ...f, repoName: item.repoName, repoUrl: item.repoUrl, isHistorical: true }))
+      ...surfaceFindings.map(f  => ({ ...f,  repoName: item.repoName, repoUrl: item.repoUrl })),
+      ...historyFindings.map(f  => ({ ...f,  repoName: item.repoName, repoUrl: item.repoUrl, isHistorical: true })),
     ];
 
     if (allFindings.length === 0) return;
 
-    // ── Post-processing: context + pair analysis ───────────────────────────
     const annotated = annotateWithContext(annotatePairs(allFindings));
 
-    // ── Validate + persist ─────────────────────────────────────────────────
-    logger.info(`[Worker] ${item.repoName} — ${annotated.length} findings (${surfaceFindings.length} surface, ${historyFindings.length} historical), validating...`);
+    // ── Persist findings not yet saved by stream validator ─────────────────
+    const alertedPairs = new Set();
+    const seenHashes   = new Set();
 
     const scanResult = {
       repoName: item.repoName,
@@ -237,76 +275,68 @@ class Worker {
       scanDate: new Date().toISOString()
     };
 
-    // FIX: deduplicate pair alerts — one alert per unique pairName+filePath, not per finding
-    const alertedPairs = new Set();
-    // FIX: deduplicate findings by secretHash — don't validate+log same secret multiple times
-    const seenHashes = new Set();
-
     for (const finding of annotated) {
-      const secretHash = sha256(finding.rawValue);
-
-      // Skip duplicate secrets within this repo scan
+      const secretHash = sha256(finding.rawValue || '');
       if (seenHashes.has(secretHash)) continue;
       seenHashes.add(secretHash);
 
-      const validation = await validateFinding(finding);
+      // Stream validator may have already validated this — use cached result if available
+      const cachedResult = batchResults.find(r => sha256(r.rawValue || '') === secretHash);
+      const validation = cachedResult
+        ? { result: cachedResult.validationResult, detail: cachedResult.validationDetail }
+        : { result: RESULTS.SKIPPED, detail: 'already validated by stream' };
 
-      const record = {
-        repoName:         item.repoName,
-        repoUrl:          item.repoUrl,
-        filePath:         finding.filePath,
-        patternId:        finding.patternId,
-        patternName:      finding.patternName,
-        provider:         finding.provider,
-        secretHash,
-        value:            finding.value,
-        entropy:          finding.entropy,
-        lineNumber:       finding.lineNumber,
-        matchContext:     finding.matchContext,
-        validationResult: validation.result,
-        validationDetail: validation.detail,
-        detectedAt:       finding.detectedAt,
-        isHistorical:     finding.isHistorical || false,
-        commitSha:        finding.commitSha,
-        isPaired:         finding.isPaired || false,
-        confidence:       finding.confidence || 50
-      };
+      const record = this._buildRecord(item, finding, validation);
 
-      await this.db.insertFinding(record);
+      // Only insert if not already inserted by onValid callback
+      if (validation.result !== RESULTS.VALID) {
+        await this.db.insertFinding(record);
+      }
       scanResult.findings.push(record);
       this.stats.findings++;
 
-      // ── Alert on valid or high-confidence findings ─────────────────────
-      if (validation.result === RESULTS.VALID) {
-        this.stats.valid++;
-        logger.warn(`🔑 LIVE SECRET! Repo=${item.repoName} Provider=${finding.provider} ` +
-          `Pattern=${finding.patternName} File=${finding.filePath} ` +
-          `${finding.isHistorical ? '[HISTORICAL]' : ''} Detail=${validation.detail}`);
-        await this.notifier.alert(record, true);
-        if (this.apiServer) this.apiServer.pushFinding(record);
-      } else if (finding.confidence >= 75 && finding.isPaired) {
-        // FIX: one pair alert per unique pairName+filePath combination only
+      // Pair alerts
+      if (finding.confidence >= 75 && finding.isPaired) {
         const pairKey = `${finding.pairName}::${finding.filePath}`;
         if (!alertedPairs.has(pairKey)) {
           alertedPairs.add(pairKey);
           logger.warn(`[HIGH-CONF PAIR] ${item.repoName} | ${finding.pairName} | ${finding.filePath}`);
           await this.notifier.alert(record, false);
         }
-        if (this.apiServer) this.apiServer.pushFinding(record);
-      } else {
+      } else if (validation.result !== RESULTS.VALID) {
         logger.info(`[Finding] ${item.repoName} | ${finding.patternName} | ${finding.filePath} | ${validation.result}`);
-        if (this.apiServer) this.apiServer.pushFinding(record);
       }
     }
 
-    // ── Generate report for this repo if findings found ────────────────────
+    // ── Generate report ────────────────────────────────────────────────────
     if (scanResult.findings.length > 0) {
-      try {
-        await this.reporter.generateAll(scanResult);
-      } catch (err) {
-        logger.debug(`[Worker] Report generation error: ${err.message}`);
-      }
+      try { await this.reporter.generateAll(scanResult); }
+      catch (err) { logger.debug(`[Worker] Report error: ${err.message}`); }
     }
+  }
+
+  // ── Helper: build DB record from finding + validation ────────────────────
+  _buildRecord(item, finding, validation) {
+    return {
+      repoName:         item.repoName,
+      repoUrl:          item.repoUrl,
+      filePath:         finding.filePath,
+      patternId:        finding.patternId,
+      patternName:      finding.patternName,
+      provider:         finding.provider,
+      secretHash:       sha256(finding.rawValue || ''),
+      value:            finding.value,
+      entropy:          finding.entropy,
+      lineNumber:       finding.lineNumber,
+      matchContext:     finding.matchContext,
+      validationResult: validation.result,
+      validationDetail: validation.detail,
+      detectedAt:       finding.detectedAt || new Date().toISOString(),
+      isHistorical:     finding.isHistorical || false,
+      commitSha:        finding.commitSha    || null,
+      isPaired:         finding.isPaired     || false,
+      confidence:       finding.confidence   || 50
+    };
   }
 
   // ── Daily Summary ──────────────────────────────────────────────────────────
