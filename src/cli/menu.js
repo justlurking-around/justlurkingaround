@@ -52,7 +52,8 @@ async function mainMenu() {
       type: 'list',
       name: 'choice',
       message: chalk.cyan.bold('Select an option:'),
-      pageSize: 14,
+      pageSize: 16,
+      loop: false,      // FIX: no wrap-around to top when reaching bottom
       choices: [
         {
           name: `${chalk.green('>>')} Start Real-Time Scanner`,
@@ -224,6 +225,7 @@ async function menuScanRepo() {
   const { scanMode } = await inquirer.prompt([{
     type: 'list', name: 'scanMode',
     message: 'Scan depth:',
+    loop: false,
     choices: [
       { name: 'Quick  — HEAD files only (~10s)',       value: 'quick' },
       { name: 'Deep   — All branches + history (~1m)', value: 'deep'  },
@@ -240,6 +242,7 @@ async function menuScanRepo() {
   const { outputFmt } = await inquirer.prompt([{
     type: 'list', name: 'outputFmt',
     message: 'Output format:',
+    loop: false,
     choices: [
       { name: 'Table   (default)',             value: 'table'  },
       { name: 'JSON    (machine-readable)',    value: 'json'   },
@@ -367,6 +370,7 @@ async function menuFindings() {
   const { filter } = await inquirer.prompt([{
     type: 'list', name: 'filter',
     message: 'Show:',
+    loop: false,
     choices: [
       { name: 'Live (VALID) only',         value: 'valid'    },
       { name: 'All findings (last 50)',     value: 'all'      },
@@ -476,6 +480,7 @@ async function menuToken() {
     const { action } = await inquirer.prompt([{
       type: 'list', name: 'action',
       message: 'Token options:',
+      loop: false,
       choices: [
         { name: 'Add / Update token',   value: 'set'    },
         { name: 'Verify current token', value: 'verify' },
@@ -545,6 +550,7 @@ async function menuNotifications() {
     const { ch } = await inquirer.prompt([{
       type: 'list', name: 'ch',
       message: 'Configure:',
+      loop: false,
       choices: [
         { name: 'Discord Webhook',        value: 'discord'  },
         { name: 'Slack Webhook',          value: 'slack'    },
@@ -740,6 +746,7 @@ async function menuDatabase() {
   const { dbChoice } = await inquirer.prompt([{
     type: 'list', name: 'dbChoice',
     message: 'Database:',
+    loop: false,
     choices: [
       { name: 'JSONL flat-file  (default, no setup)', value: 'jsonl'    },
       { name: 'PostgreSQL       (production)',         value: 'postgres' },
@@ -797,6 +804,7 @@ async function menuValidate() {
     type: 'list', name: 'provider',
     message: 'Provider:',
     pageSize: 14,
+    loop: false,
     choices: [
       'openai','anthropic','github','stripe','slack',
       'sendgrid','telegram','mailgun','heroku','npm',

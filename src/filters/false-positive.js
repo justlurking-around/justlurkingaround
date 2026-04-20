@@ -10,6 +10,23 @@
  * - Known-safe patterns
  */
 
+// Exact filenames to always skip regardless of extension
+const SKIP_FILENAMES = new Set([
+  'package-lock.json',
+  'pnpm-lock.yaml',
+  'yarn.lock',
+  'composer.lock',
+  'Gemfile.lock',
+  'Pipfile.lock',
+  'poetry.lock',
+  'cargo.lock',
+  'mix.lock',
+  'packages.lock.json',
+  'shrinkwrap.json',
+  'npm-shrinkwrap.json',
+  'bun.lockb',
+]);
+
 // File path patterns to always skip
 const SKIP_PATH_PATTERNS = [
   /\.spec\.(js|ts|py|rb|go)$/i,
@@ -39,6 +56,24 @@ const SKIP_PATH_PATTERNS = [
   /build\//i,
   /coverage\//i,
   /\.nyc_output\//i,
+  // Lock files by path pattern
+  /package-lock\.json$/i,
+  /pnpm-lock\.yaml$/i,
+  /yarn\.lock$/i,
+  /composer\.lock$/i,
+  /Gemfile\.lock$/i,
+  /Pipfile\.lock$/i,
+  /poetry\.lock$/i,
+  /cargo\.lock$/i,
+  /\.lockb$/i,
+  // Minified / bundled files
+  /\.min\.(js|css)$/i,
+  /\.bundle\.js$/i,
+  /\.chunk\.js$/i,
+  // Generated files
+  /\.d\.ts$/i,
+  /swagger.*\.json$/i,
+  /openapi.*\.json$/i,
 ];
 
 // File extensions to skip (binary / non-text)
@@ -87,6 +122,12 @@ const HIGH_VALUE_EXTENSIONS = new Set([
  */
 function shouldSkipFile(filePath) {
   if (!filePath) return { skip: true, reason: 'empty path' };
+
+  // Exact filename check (fastest)
+  const basename = filePath.split('/').pop();
+  if (SKIP_FILENAMES.has(basename)) {
+    return { skip: true, reason: `skip filename: ${basename}` };
+  }
 
   // Extension check
   const ext = '.' + filePath.split('.').pop().toLowerCase();
@@ -144,4 +185,4 @@ function isHighValueFile(filePath) {
   return false;
 }
 
-module.exports = { shouldSkipFile, isDummyValue, isHighValueFile, SKIP_PATH_PATTERNS };
+module.exports = { shouldSkipFile, isDummyValue, isHighValueFile, SKIP_PATH_PATTERNS, SKIP_FILENAMES };

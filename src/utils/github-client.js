@@ -2,11 +2,13 @@
 
 /**
  * GitHub API client
- * FIX: singleton recreated when token changes (token rotation support)
- * FIX: secondary rate-limit (abuse) detection on 403 + Retry-After
- * FIX: timeout on unauthenticated client increased to avoid false network errors
- * FIX: base URL stripped on raw.githubusercontent.com fetches
+ * FIX: MaxListenersExceededWarning — bump EventEmitter limit before
+ *      axios-rate-limit attaches per-request socket listeners
  */
+
+// FIX: raise max listeners BEFORE requiring axios to prevent
+// "Possible EventEmitter memory leak" warnings on concurrent scans
+require('events').EventEmitter.defaultMaxListeners = 30;
 
 const axios = require('axios');
 const axiosRetry = require('axios-retry').default || require('axios-retry');

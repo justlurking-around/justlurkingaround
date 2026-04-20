@@ -237,8 +237,18 @@ class Worker {
       scanDate: new Date().toISOString()
     };
 
+    // FIX: deduplicate pair alerts — one alert per unique pairName+filePath, not per finding
+    const alertedPairs = new Set();
+    // FIX: deduplicate findings by secretHash — don't validate+log same secret multiple times
+    const seenHashes = new Set();
+
     for (const finding of annotated) {
       const secretHash = sha256(finding.rawValue);
+
+      // Skip duplicate secrets within this repo scan
+      if (seenHashes.has(secretHash)) continue;
+      seenHashes.add(secretHash);
+
       const validation = await validateFinding(finding);
 
       const record = {
@@ -275,9 +285,14 @@ class Worker {
         await this.notifier.alert(record, true);
         if (this.apiServer) this.apiServer.pushFinding(record);
       } else if (finding.confidence >= 75 && finding.isPaired) {
-        // High-confidence paired secret — alert even without validation
-        logger.warn(`⚠️  HIGH-CONF PAIR: ${item.repoName} | ${finding.pairName} | ${finding.filePath}`);
-        await this.notifier.alert(record, false);
+        // FIX: one pair alert per unique pairName+filePath combination only
+        const pairKey = `${finding.pairName}::${finding.filePath}`;
+        if (!alertedPairs.has(pairKey)) {
+          alertedPairs.add(pairKey);
+          logger.warn(`[HIGH-CONF PAIR] ${item.repoName} | ${finding.pairName} | ${finding.filePath}`);
+          await this.notifier.alert(record, false);
+        }
+        if (this.apiServer) this.apiServer.pushFinding(record);
       } else {
         logger.info(`[Finding] ${item.repoName} | ${finding.patternName} | ${finding.filePath} | ${validation.result}`);
         if (this.apiServer) this.apiServer.pushFinding(record);
