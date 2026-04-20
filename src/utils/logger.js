@@ -150,7 +150,7 @@ const consoleFormat = printf(({ level, message, timestamp: ts, stack }) => {
     return `${C.gray}${ts}${C.reset} ${C.yellow}PAIR${C.reset} ${display}`;
   }
 
-  // [Finding] lines — compact table row
+  // [Finding] lines — VALID/ERROR shown prominently; SKIPPED/INVALID are debug-only
   if (msg.includes('[Finding]')) {
     const formatted = formatFindingLine(msg, ts);
     if (formatted) return formatted;

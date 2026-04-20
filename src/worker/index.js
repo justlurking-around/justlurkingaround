@@ -40,6 +40,7 @@ const { getRevocationGuide } = require('../scanner/revocation-guide');
 const Reporter           = require('../reporter');
 const APIServer          = require('../api/server');
 const { sha256 }         = require('../utils/hash');
+const { sanitizeRepoName, sanitizeForLog } = require('../utils/security');
 const logger             = require('../utils/logger');
 const config             = require('../../config/default');
 
@@ -178,6 +179,14 @@ class Worker {
 
   async _handlePolledRepo(event) {
     this.stats.polled++;
+    // Sanitize repo name from untrusted GitHub Events API payload
+    const safeRepoName = sanitizeRepoName(event.repoName);
+    if (!safeRepoName) {
+      logger.debug(`[Worker] Invalid repo name rejected: ${sanitizeForLog(event.repoName)}`);
+      return;
+    }
+    event = { ...event, repoName: safeRepoName };
+
     // Allowlist check
     if (this.allowlist.isAllowlisted(event.repoName)) {
       logger.debug(`[Worker] Skipping allowlisted repo: ${event.repoName}`);
@@ -377,7 +386,11 @@ class Worker {
           await this.notifier.alert(record, false);
         }
       } else if (validation.result !== RESULTS.VALID) {
-        logger.info(`[Finding] ${item.repoName} | ${finding.patternName} | ${finding.filePath} | ${validation.result}`);
+        // SKIPPED/INVALID are debug only — they flood the screen at info level
+        const logFn = validation.result === 'VALID' ? 'warn'
+                    : validation.result === 'ERROR'  ? 'warn'
+                    : 'debug';
+        logger[logFn](`[Finding] ${item.repoName} | ${finding.patternName} | ${finding.filePath} | ${validation.result}`);
       }
     }
 

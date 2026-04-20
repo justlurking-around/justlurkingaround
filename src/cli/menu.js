@@ -269,9 +269,11 @@ async function menuScanRepo() {
   applyToEnv();
   if (!validate) process.env.VALIDATE_SECRETS = 'false';
 
-  const repoName = repoUrl
-    .replace(/https?:\/\/github\.com\//, '')
-    .replace(/\.git$/, '').replace(/\/$/, '');
+  const { sanitizeGitHubUrl, sanitizeRepoName } = require('../utils/security');
+  const safeUrl  = sanitizeGitHubUrl(repoUrl);
+  if (!safeUrl) { error('Invalid GitHub URL'); await pause(); return; }
+  const repoName = sanitizeRepoName(safeUrl.replace('https://github.com/', ''));
+  if (!repoName) { error('Invalid repo name'); await pause(); return; }
 
   const spinner = ora(`Scanning ${repoName}...`).start();
 
