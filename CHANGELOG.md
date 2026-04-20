@@ -2,6 +2,18 @@
 
 All notable changes are documented here.
 
+## [2.2.0] — 2026-04-20 — remove deprecated npm crypto package (use Node.js built-in) [heal]
+
+**Type:** 🐛 Fixed  
+**Commit:** `c676be7`  
+
+
+
+### Files Changed
+
+- **Dependencies**: `package-lock.json`, `package.json`
+
+---
 ## [2.2.0] — 2026-04-20 — self-healing system v2 — fully working autonomous git push
 
 **Type:** 🐛 Fixed  
