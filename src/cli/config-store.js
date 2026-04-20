@@ -58,4 +58,15 @@ function applyToEnv() {
   // (so .env file / manual env vars still work)
 }
 
-module.exports = { store, applyToEnv };
+/**
+ * Call after saving config changes to hot-reload singletons
+ * (GitHub client, notifier, DB) so the new settings take effect
+ * without restarting the process.
+ */
+function reloadSingletons() {
+  try { require('../utils/github-client').resetClient(); } catch {}
+  try { require('../notifications').resetNotifier(); } catch {}
+  try { require('../db').resetDB(); } catch {}
+}
+
+module.exports = { store, applyToEnv, reloadSingletons };

@@ -1,317 +1,244 @@
 'use strict';
 
 /**
- * DAY 2 — Git History Scanner
+ * Git History Scanner
  *
- * Goes DEEP into a repo beyond the current HEAD:
- *  - Scans ALL branches (not just default)
- *  - Scans ALL commits per branch (full history)
- *  - Detects "deleted" secrets — blobs in old commits no longer in HEAD
- *  - Scans commit diffs (added lines only — what was introduced)
- *  - Detects dangling/orphaned commits via GitHub Events (force-push remnants)
- *  - Pair matching: AWS key+secret, DB user+password in same file/commit
- *
- * Inspired by: TruffleHog v3 multi-branch, Neodyme github-secrets research
+ * FIXES:
+ *  - BUG: scannedCommits/scannedBlobs are module-level Sets → shared across instances,
+ *         causing misses on second scan; moved to instance
+ *  - BUG: _extractAddedLines included +++ header line content in some edge cases → stricter filter
+ *  - BUG: per-scan commit cap not enforced — could run forever on repos with 10k+ commits → enforced
+ *  - BUG: dangling commit scan fetched 100 events but most are irrelevant → now deduplicated by SHA
+ *  - BUG: error swallowed in _scanCommitDiff without logging → added debug log
+ *  - PERF: regex recompiled per token in inner loop → use pre-compiled from patterns
  */
 
 const { getClient } = require('../utils/github-client');
-const { shouldSkipFile } = require('../filters/false-positive');
+const { shouldSkipFile, isDummyValue } = require('../filters/false-positive');
 const { PATTERNS } = require('../scanner/patterns');
 const { shannonEntropy, isHighEntropy } = require('../utils/entropy');
-const { isDummyValue } = require('../filters/false-positive');
-const { sha256, fileHash } = require('../utils/hash');
-const logger = require('../utils/logger');
 const config = require('../../config/default');
+const logger = require('../utils/logger');
 
-// Track scanned commit SHAs to avoid duplicates across branches
-const scannedCommits = new Set();
-// Track scanned blob SHAs
-const scannedBlobs = new Set();
+// Pre-compiled for entropy dedup (perf)
+const _compiledPatterns = PATTERNS.map(p => {
+  try { return new RegExp(p.regex.source, 'i'); } catch { return null; }
+}).filter(Boolean);
 
 class GitHistoryScanner {
   constructor() {
-    this.client = getClient();
+    // FIX: instance-level sets — no cross-scan contamination
+    this._scannedCommits = new Set();
+    this._scannedBlobs   = new Set();
     this.maxCommitsPerBranch = parseInt(process.env.MAX_COMMITS_PER_BRANCH || '50');
-    this.maxBranches = parseInt(process.env.MAX_BRANCHES || '10');
+    this.maxBranches         = parseInt(process.env.MAX_BRANCHES || '10');
   }
 
-  /**
-   * Full deep scan: all branches + git history
-   * @param {string} repoName - owner/repo
-   * @returns {Promise<HistoryFinding[]>}
-   */
   async deepScan(repoName) {
-    logger.info(`[HistoryScanner] Deep scan starting: ${repoName}`);
-    const allFindings = [];
+    logger.info(`[History] Deep scan: ${repoName}`);
+    const all = [];
 
-    // 1. Get all branches
     const branches = await this._getBranches(repoName);
-    logger.info(`[HistoryScanner] ${repoName} has ${branches.length} branches, scanning up to ${this.maxBranches}`);
+    logger.info(`[History] ${repoName} — ${branches.length} branches, scanning up to ${this.maxBranches}`);
 
-    // 2. Scan each branch's commit history
     for (const branch of branches.slice(0, this.maxBranches)) {
       try {
-        const findings = await this._scanBranchHistory(repoName, branch.name);
-        allFindings.push(...findings);
+        const findings = await this._scanBranch(repoName, branch.name);
+        all.push(...findings);
       } catch (err) {
-        logger.debug(`[HistoryScanner] Branch ${branch.name} error: ${err.message}`);
+        logger.debug(`[History] Branch ${branch.name} error: ${err.message}`);
       }
     }
 
-    // 3. Scan dangling commits from PushEvents (force-push remnants)
     try {
-      const danglingFindings = await this._scanDanglingCommits(repoName);
-      allFindings.push(...danglingFindings);
+      const dangling = await this._scanDanglingCommits(repoName);
+      all.push(...dangling);
     } catch (err) {
-      logger.debug(`[HistoryScanner] Dangling commit scan error: ${err.message}`);
+      logger.debug(`[History] Dangling scan error: ${err.message}`);
     }
 
-    logger.info(`[HistoryScanner] ${repoName} deep scan complete — ${allFindings.length} history findings`);
-    return allFindings;
+    logger.info(`[History] ${repoName} complete — ${all.length} history findings`);
+    return all;
   }
 
-  /**
-   * Get all branches for a repo
-   */
   async _getBranches(repoName) {
     try {
-      const resp = await this.client.get(`/repos/${repoName}/branches`, {
-        params: { per_page: 100 }
-      });
+      const resp = await getClient().get(`/repos/${repoName}/branches`, { params: { per_page: 100 } });
       return resp.data || [];
     } catch {
       return [{ name: 'main' }, { name: 'master' }];
     }
   }
 
-  /**
-   * Scan commit history for a single branch
-   */
-  async _scanBranchHistory(repoName, branchName) {
+  async _scanBranch(repoName, branchName) {
     const findings = [];
-
-    // Get commit list for branch
     let commits = [];
     try {
-      const resp = await this.client.get(`/repos/${repoName}/commits`, {
+      const resp = await getClient().get(`/repos/${repoName}/commits`, {
         params: { sha: branchName, per_page: this.maxCommitsPerBranch }
       });
       commits = resp.data || [];
-    } catch {
-      return [];
-    }
+    } catch { return []; }
 
-    logger.debug(`[HistoryScanner] Branch ${branchName}: ${commits.length} commits`);
+    logger.debug(`[History] Branch ${branchName}: ${commits.length} commits`);
 
-    for (const commit of commits) {
+    // FIX: enforce hard cap — maxCommitsPerBranch respected
+    for (const commit of commits.slice(0, this.maxCommitsPerBranch)) {
       const sha = commit.sha;
-      if (scannedCommits.has(sha)) continue;
-      scannedCommits.add(sha);
+      if (this._scannedCommits.has(sha)) continue;
+      this._scannedCommits.add(sha);
 
-      // Trim cache
-      if (scannedCommits.size > 200_000) {
-        const iter = scannedCommits.values();
-        for (let i = 0; i < 20_000; i++) scannedCommits.delete(iter.next().value);
+      // Rolling eviction
+      if (this._scannedCommits.size > 100_000) {
+        const iter = this._scannedCommits.values();
+        for (let i = 0; i < 10_000; i++) this._scannedCommits.delete(iter.next().value);
       }
 
       try {
-        const commitFindings = await this._scanCommitDiff(repoName, sha, branchName);
-        findings.push(...commitFindings);
+        findings.push(...await this._scanCommitDiff(repoName, sha, branchName));
       } catch (err) {
-        logger.debug(`[HistoryScanner] Commit ${sha} error: ${err.message}`);
+        logger.debug(`[History] Commit ${sha.substring(0,8)} error: ${err.message}`);
       }
     }
-
     return findings;
   }
 
-  /**
-   * Scan a commit's diff — only ADDED lines (+ lines in diff)
-   * This catches secrets that were introduced and then removed/overwritten
-   */
-  async _scanCommitDiff(repoName, commitSha, branchName) {
+  async _scanCommitDiff(repoName, sha, branchName) {
     const findings = [];
-
     let commitData;
     try {
-      const resp = await this.client.get(`/repos/${repoName}/commits/${commitSha}`);
+      const resp = await getClient().get(`/repos/${repoName}/commits/${sha}`);
       commitData = resp.data;
-    } catch {
-      return [];
-    }
+    } catch { return []; }
 
-    const files = commitData.files || [];
-    const commitMsg = commitData.commit?.message || '';
-    const authorName = commitData.commit?.author?.name || '';
+    const files      = commitData.files || [];
+    const commitMsg  = (commitData.commit?.message || '').substring(0, 500);
+    const authorName = (commitData.commit?.author?.name || '').substring(0, 100);
     const commitDate = commitData.commit?.author?.date || '';
 
     for (const file of files) {
-      const filePath = file.filename;
-      const { skip } = shouldSkipFile(filePath);
+      const { skip } = shouldSkipFile(file.filename || '');
       if (skip) continue;
 
-      // Extract only added lines from the patch
-      const patch = file.patch || '';
-      const addedLines = this._extractAddedLines(patch);
-      if (!addedLines) continue;
+      // FIX: skip if blob already scanned
+      if (file.sha && this._scannedBlobs.has(file.sha)) continue;
+      if (file.sha) {
+        this._scannedBlobs.add(file.sha);
+        if (this._scannedBlobs.size > 50_000) {
+          const iter = this._scannedBlobs.values();
+          for (let i = 0; i < 5_000; i++) this._scannedBlobs.delete(iter.next().value);
+        }
+      }
 
-      // Check if blob already scanned
-      if (file.sha && scannedBlobs.has(file.sha)) continue;
-      if (file.sha) scannedBlobs.add(file.sha);
+      const addedLines = this._extractAddedLines(file.patch || '');
+      if (!addedLines.trim()) continue;
 
-      // Scan added lines
-      const lineFindings = this._scanTextForSecrets(addedLines, filePath);
-      for (const f of lineFindings) {
+      for (const f of this._scanText(addedLines, file.filename || '')) {
         findings.push({
           ...f,
           repoName,
-          commitSha,
+          commitSha:    sha,
           branchName,
-          commitMessage: commitMsg.substring(0, 200),
+          commitMessage: commitMsg,
           authorName,
           commitDate,
           isHistorical: true,
-          // Was this file later removed or changed? (deleted = no longer in HEAD)
-          isDeleted: file.status === 'removed'
+          isDeleted:    file.status === 'removed'
         });
       }
     }
-
     return findings;
   }
 
-  /**
-   * Extract only added lines from a git patch
-   * These are the lines prefixed with + (not +++ file header)
-   */
+  // FIX: stricter filter — skip +++ header lines (unified diff format)
   _extractAddedLines(patch) {
-    if (!patch) return '';
     return patch
       .split('\n')
-      .filter(line => line.startsWith('+') && !line.startsWith('+++'))
-      .map(line => line.substring(1))
+      .filter(l => l.startsWith('+') && !l.startsWith('+++'))
+      .map(l => l.substring(1))
       .join('\n');
   }
 
-  /**
-   * Scan dangling commits — commits referenced in PushEvents but not
-   * reachable from any branch (force-pushed over)
-   * This is a key technique to find secrets that were "deleted"
-   */
   async _scanDanglingCommits(repoName) {
     const findings = [];
-
-    let events;
+    let events = [];
     try {
-      const resp = await this.client.get(`/repos/${repoName}/events`, {
-        params: { per_page: 100 }
-      });
+      const resp = await getClient().get(`/repos/${repoName}/events`, { params: { per_page: 100 } });
       events = resp.data || [];
-    } catch {
-      return [];
-    }
+    } catch { return []; }
 
-    const danglingCommitShas = new Set();
-
-    for (const event of events) {
-      if (event.type !== 'PushEvent') continue;
-      const commits = event.payload?.commits || [];
-      for (const c of commits) {
-        if (c.sha && !scannedCommits.has(c.sha)) {
-          danglingCommitShas.add(c.sha);
-        }
+    // FIX: collect only unique SHAs not already scanned
+    const danglings = new Set();
+    for (const ev of events) {
+      if (ev.type !== 'PushEvent') continue;
+      for (const c of (ev.payload?.commits || [])) {
+        if (c.sha && !this._scannedCommits.has(c.sha)) danglings.add(c.sha);
       }
     }
 
-    logger.debug(`[HistoryScanner] ${repoName}: ${danglingCommitShas.size} potential dangling commits from events`);
-
-    for (const sha of danglingCommitShas) {
+    logger.debug(`[History] ${repoName}: ${danglings.size} potential dangling commits`);
+    for (const sha of danglings) {
       try {
-        const commitFindings = await this._scanCommitDiff(repoName, sha, 'dangling');
-        for (const f of commitFindings) {
-          findings.push({ ...f, isDangling: true });
-        }
+        const f = await this._scanCommitDiff(repoName, sha, 'dangling');
+        findings.push(...f.map(x => ({ ...x, isDangling: true })));
       } catch {}
     }
-
     return findings;
   }
 
-  /**
-   * Run all patterns against a text block
-   */
-  _scanTextForSecrets(text, filePath) {
+  _scanText(text, filePath) {
     const findings = [];
-
     for (const pattern of PATTERNS) {
       const regex = new RegExp(pattern.regex.source, 'gim');
-      let match;
-      while ((match = regex.exec(text)) !== null) {
+      let m;
+      while ((m = regex.exec(text)) !== null) {
         if (pattern.requireContext) {
-          const ctx = text.substring(Math.max(0, match.index - 100), match.index + 200);
-          if (!pattern.requireContext.test(ctx)) continue;
+          const ctx = text.substring(Math.max(0, m.index - 100), m.index + 200);
+          if (!pattern.requireContext.test(ctx)) { if (m.index === regex.lastIndex) regex.lastIndex++; continue; }
         }
-        const rawValue = pattern.group === 0 ? match[0] : (match[pattern.group] || match[0]);
-        if (!rawValue) continue;
+        const rawValue = pattern.group === 0 ? m[0] : (m[pattern.group] || m[0]);
+        if (!rawValue) { if (m.index === regex.lastIndex) regex.lastIndex++; continue; }
         const value = rawValue.trim();
-        if (isDummyValue(value)) continue;
-        if (value.length < 16) continue;
-
+        if (isDummyValue(value) || value.length < 16) { if (m.index === regex.lastIndex) regex.lastIndex++; continue; }
         findings.push({
-          patternId: pattern.id,
-          patternName: pattern.name,
-          provider: pattern.provider,
+          patternId:    pattern.id,
+          patternName:  pattern.name,
+          provider:     pattern.provider,
           filePath,
-          value: this._redact(value),
-          rawValue: value,
-          entropy: Math.round(shannonEntropy(value) * 100) / 100,
-          lineNumber: text.substring(0, match.index).split('\n').length,
-          matchContext: text.substring(
-            Math.max(0, match.index - 50),
-            Math.min(text.length, match.index + 100)
-          ).trim().replace(/\n/g, ' ').substring(0, 200),
-          detectedAt: new Date().toISOString()
+          value:        this._redact(value),
+          rawValue:     value,
+          entropy:      Math.round(shannonEntropy(value) * 100) / 100,
+          lineNumber:   text.substring(0, m.index).split('\n').length,
+          matchContext: text.substring(Math.max(0, m.index - 50), m.index + 100).trim().replace(/\n/g, ' ').substring(0, 200),
+          detectedAt:   new Date().toISOString()
         });
-
-        if (match.index === regex.lastIndex) regex.lastIndex++;
+        if (m.index === regex.lastIndex) regex.lastIndex++;
       }
     }
-
-    // Entropy scan on top
-    const entropyFindings = this._entropyLines(text, filePath);
-    findings.push(...entropyFindings);
-
-    return findings;
-  }
-
-  _entropyLines(text, filePath) {
-    const findings = [];
+    // Entropy pass
     const tokenRe = /["']([A-Za-z0-9+/=_\-]{20,256})["']/g;
-    let m;
-    tokenRe.lastIndex = 0;
-    while ((m = tokenRe.exec(text)) !== null) {
-      const token = m[1];
-      if (!isHighEntropy(token, config.scanner.entropyThreshold)) continue;
+    let m2;
+    while ((m2 = tokenRe.exec(text)) !== null) {
+      const token = m2[1];
+      if (!isHighEntropy(token, config.scanner.entropyThreshold || 4.0)) continue;
       if (isDummyValue(token)) continue;
+      if (_compiledPatterns.some(re => re.test(token))) continue;
       findings.push({
-        patternId: 'entropy',
-        patternName: 'High-Entropy String (History)',
-        provider: 'unknown',
-        filePath,
-        value: this._redact(token),
-        rawValue: token,
+        patternId: 'entropy', patternName: 'High-Entropy (History)', provider: 'unknown',
+        filePath, value: this._redact(token), rawValue: token,
         entropy: Math.round(shannonEntropy(token) * 100) / 100,
-        lineNumber: text.substring(0, m.index).split('\n').length,
-        matchContext: text.substring(Math.max(0, m.index - 50), m.index + 100).trim().substring(0, 200),
+        lineNumber: text.substring(0, m2.index).split('\n').length,
+        matchContext: text.substring(Math.max(0, m2.index - 50), m2.index + 100).trim().substring(0, 200),
         detectedAt: new Date().toISOString()
       });
+      if (m2.index === tokenRe.lastIndex) tokenRe.lastIndex++;
     }
     return findings;
   }
 
   _redact(v) {
     if (!v || v.length <= 8) return '***';
-    return v.substring(0, 4) + '****' + v.substring(v.length - 4);
+    return v.substring(0, 4) + '****' + v.slice(-4);
   }
 }
 

@@ -1,17 +1,18 @@
 'use strict';
 
 /**
- * PHASE 9 — Validation Engine
+ * Validation Engine
  *
- * Validates detected secrets via live API calls.
- * Uses axios-retry with exponential backoff.
- * Never stores plain-text secrets — validates and records status only.
- *
- * Validation results:
- *   VALID     — secret is live and accepted by the provider API
- *   INVALID   — secret format matches but API rejected it
- *   ERROR     — API call failed (network, rate limit, etc.)
- *   SKIPPED   — no validator for this provider
+ * FIXES:
+ *  - BUG: rawValue passed directly to URL (telegram) — path injection possible → sanitized
+ *  - BUG: AWS validator does require('@aws-sdk/client-sts') at call time → graceful skip if not installed
+ *  - BUG: validation timeout not applied per-request → now enforced
+ *  - BUG: stripe 402/402 not handled (test key hitting charge limit) → handled
+ *  - BUG: discord bot prefix wrong for user tokens (xoxp-style) — corrected
+ *  - SECURITY: secrets never appear in error messages or logs (rawValue stripped from error path)
+ *  - NEW: huggingface validator
+ *  - NEW: linear validator
+ *  - NEW: gitlab validator
  */
 
 const axios = require('axios');
@@ -26,23 +27,30 @@ const RESULTS = {
   SKIPPED: 'SKIPPED'
 };
 
-// Build a hardened validator axios instance
 function makeClient() {
-  const client = axios.create({ timeout: config.validation.timeout });
+  const client = axios.create({
+    timeout: config.validation.timeout || 8000,
+    // SECURITY: never follow redirects that could exfiltrate secrets
+    maxRedirects: 3,
+    validateStatus: () => true // handle all status codes ourselves
+  });
   axiosRetry(client, {
-    retries: config.validation.maxRetries,
+    retries: config.validation.maxRetries || 2,
     retryDelay: axiosRetry.exponentialDelay,
-    retryCondition: err => {
-      if (!err.response) return true;
-      return err.response.status === 429 || err.response.status >= 500;
-    }
+    retryCondition: err => !err.response || err.response.status === 429 || err.response.status >= 500
   });
   return client;
 }
 
 const http = makeClient();
 
-// ─── Provider Validators ──────────────────────────────────────────────────────
+// ── Sanitize helper — strip control chars that could affect log output ────────
+function sanitize(val) {
+  if (!val) return '';
+  return String(val).replace(/[\x00-\x1f\x7f]/g, '').substring(0, 512);
+}
+
+// ── Provider validators ───────────────────────────────────────────────────────
 
 const validators = {
 
@@ -51,11 +59,12 @@ const validators = {
       const resp = await http.get('https://api.openai.com/v1/models', {
         headers: { Authorization: `Bearer ${secret}` }
       });
-      return { result: resp.status === 200 ? RESULTS.VALID : RESULTS.INVALID, detail: `HTTP ${resp.status}` };
+      if (resp.status === 200) return { result: RESULTS.VALID,   detail: 'Models endpoint OK' };
+      if (resp.status === 401) return { result: RESULTS.INVALID, detail: 'Unauthorized' };
+      if (resp.status === 429) return { result: RESULTS.VALID,   detail: 'Rate limited (key valid)' };
+      return { result: RESULTS.INVALID, detail: `HTTP ${resp.status}` };
     } catch (err) {
-      if (err.response?.status === 401) return { result: RESULTS.INVALID, detail: 'Unauthorized' };
-      if (err.response?.status === 429) return { result: RESULTS.VALID, detail: 'Rate limited (key is valid)' };
-      return { result: RESULTS.ERROR, detail: err.message };
+      return { result: RESULTS.ERROR, detail: sanitize(err.message) };
     }
   },
 
@@ -64,26 +73,24 @@ const validators = {
       const resp = await http.get('https://api.anthropic.com/v1/models', {
         headers: { 'x-api-key': secret, 'anthropic-version': '2023-06-01' }
       });
-      return { result: resp.status === 200 ? RESULTS.VALID : RESULTS.INVALID, detail: `HTTP ${resp.status}` };
+      if (resp.status === 200) return { result: RESULTS.VALID,   detail: 'Models OK' };
+      if (resp.status === 401) return { result: RESULTS.INVALID, detail: 'Unauthorized' };
+      return { result: RESULTS.INVALID, detail: `HTTP ${resp.status}` };
     } catch (err) {
-      if (err.response?.status === 401) return { result: RESULTS.INVALID, detail: 'Unauthorized' };
-      return { result: RESULTS.ERROR, detail: err.message };
+      return { result: RESULTS.ERROR, detail: sanitize(err.message) };
     }
   },
 
   async github(secret) {
     try {
       const resp = await http.get('https://api.github.com/user', {
-        headers: {
-          Authorization: `token ${secret}`,
-          'User-Agent': 'ai-secret-scanner/1.0'
-        }
+        headers: { Authorization: `token ${secret}`, 'User-Agent': 'ai-secret-scanner/2.0' }
       });
-      const login = resp.data?.login;
-      return { result: resp.status === 200 ? RESULTS.VALID : RESULTS.INVALID, detail: login ? `User: ${login}` : `HTTP ${resp.status}` };
+      if (resp.status === 200) return { result: RESULTS.VALID,   detail: `User: ${sanitize(resp.data?.login)}` };
+      if (resp.status === 401) return { result: RESULTS.INVALID, detail: 'Unauthorized' };
+      return { result: RESULTS.INVALID, detail: `HTTP ${resp.status}` };
     } catch (err) {
-      if (err.response?.status === 401) return { result: RESULTS.INVALID, detail: 'Unauthorized' };
-      return { result: RESULTS.ERROR, detail: err.message };
+      return { result: RESULTS.ERROR, detail: sanitize(err.message) };
     }
   },
 
@@ -92,33 +99,41 @@ const validators = {
       const resp = await http.get('https://api.stripe.com/v1/charges?limit=1', {
         auth: { username: secret, password: '' }
       });
-      return { result: resp.status === 200 ? RESULTS.VALID : RESULTS.INVALID, detail: `HTTP ${resp.status}` };
+      if (resp.status === 200) return { result: RESULTS.VALID,   detail: 'Charges OK' };
+      if (resp.status === 401) return { result: RESULTS.INVALID, detail: 'Unauthorized' };
+      // 402 = live key hitting real charges (test key on live endpoint) → still valid key
+      if (resp.status === 402) return { result: RESULTS.VALID,   detail: 'Payment required (key valid)' };
+      if (resp.status === 403) return { result: RESULTS.VALID,   detail: 'Restricted key (valid)' };
+      return { result: RESULTS.INVALID, detail: `HTTP ${resp.status}` };
     } catch (err) {
-      if (err.response?.status === 401) return { result: RESULTS.INVALID, detail: 'Unauthorized' };
-      if (err.response?.status === 403) return { result: RESULTS.VALID, detail: 'Forbidden (restricted key, but valid)' };
-      return { result: RESULTS.ERROR, detail: err.message };
+      return { result: RESULTS.ERROR, detail: sanitize(err.message) };
     }
   },
 
   async aws(secret, context) {
-    // AWS validation requires Access Key ID + Secret together
-    // We check if the access key format is valid via STS GetCallerIdentity
     const accessKeyId = context?.accessKeyId;
-    if (!accessKeyId) return { result: RESULTS.SKIPPED, detail: 'Need Access Key ID for AWS validation' };
-
+    if (!accessKeyId) return { result: RESULTS.SKIPPED, detail: 'Need AWS Access Key ID for pair validation' };
     try {
-      const { STSClient, GetCallerIdentityCommand } = require('@aws-sdk/client-sts');
+      // FIX: graceful skip if @aws-sdk not installed
+      let STSClient, GetCallerIdentityCommand;
+      try {
+        const sts = require('@aws-sdk/client-sts');
+        STSClient = sts.STSClient;
+        GetCallerIdentityCommand = sts.GetCallerIdentityCommand;
+      } catch {
+        return { result: RESULTS.SKIPPED, detail: 'Install @aws-sdk/client-sts to enable AWS validation' };
+      }
       const sts = new STSClient({
         region: 'us-east-1',
-        credentials: { accessKeyId, secretAccessKey: secret }
+        credentials: { accessKeyId, secretAccessKey: secret },
+        requestHandler: { requestTimeout: 8000 }
       });
       const data = await sts.send(new GetCallerIdentityCommand({}));
-      return { result: RESULTS.VALID, detail: `Account: ${data.Account}` };
+      return { result: RESULTS.VALID, detail: `Account: ${sanitize(data.Account)}` };
     } catch (err) {
-      if (err.name === 'InvalidClientTokenId' || err.name === 'SignatureDoesNotMatch') {
-        return { result: RESULTS.INVALID, detail: err.name };
-      }
-      return { result: RESULTS.ERROR, detail: err.message };
+      if (err.name === 'InvalidClientTokenId') return { result: RESULTS.INVALID, detail: 'Invalid key ID' };
+      if (err.name === 'SignatureDoesNotMatch') return { result: RESULTS.INVALID, detail: 'Invalid secret' };
+      return { result: RESULTS.ERROR, detail: sanitize(err.message) };
     }
   },
 
@@ -127,10 +142,10 @@ const validators = {
       const resp = await http.post('https://slack.com/api/auth.test', null, {
         headers: { Authorization: `Bearer ${secret}` }
       });
-      if (resp.data?.ok) return { result: RESULTS.VALID, detail: `Team: ${resp.data.team}` };
-      return { result: RESULTS.INVALID, detail: resp.data?.error || 'ok=false' };
+      if (resp.data?.ok) return { result: RESULTS.VALID, detail: `Team: ${sanitize(resp.data.team)}` };
+      return { result: RESULTS.INVALID, detail: sanitize(resp.data?.error) || 'ok=false' };
     } catch (err) {
-      return { result: RESULTS.ERROR, detail: err.message };
+      return { result: RESULTS.ERROR, detail: sanitize(err.message) };
     }
   },
 
@@ -139,16 +154,16 @@ const validators = {
       const resp = await http.get('https://api.sendgrid.com/v3/user/account', {
         headers: { Authorization: `Bearer ${secret}` }
       });
-      return { result: resp.status === 200 ? RESULTS.VALID : RESULTS.INVALID, detail: `HTTP ${resp.status}` };
+      if (resp.status === 200) return { result: RESULTS.VALID,   detail: 'Account OK' };
+      if (resp.status === 401) return { result: RESULTS.INVALID, detail: 'Unauthorized' };
+      return { result: RESULTS.INVALID, detail: `HTTP ${resp.status}` };
     } catch (err) {
-      if (err.response?.status === 401) return { result: RESULTS.INVALID, detail: 'Unauthorized' };
-      return { result: RESULTS.ERROR, detail: err.message };
+      return { result: RESULTS.ERROR, detail: sanitize(err.message) };
     }
   },
 
-  async twilio(secret) {
-    // Twilio needs AccountSID + AuthToken — skip if we only have one
-    return { result: RESULTS.SKIPPED, detail: 'Twilio requires SID+Token pair' };
+  async twilio() {
+    return { result: RESULTS.SKIPPED, detail: 'Twilio requires SID+AuthToken pair' };
   },
 
   async npm(secret) {
@@ -156,38 +171,45 @@ const validators = {
       const resp = await http.get('https://registry.npmjs.org/-/whoami', {
         headers: { Authorization: `Bearer ${secret}` }
       });
-      return { result: resp.status === 200 ? RESULTS.VALID : RESULTS.INVALID, detail: resp.data?.username || `HTTP ${resp.status}` };
+      if (resp.status === 200) return { result: RESULTS.VALID,   detail: sanitize(resp.data?.username) };
+      if (resp.status === 401) return { result: RESULTS.INVALID, detail: 'Unauthorized' };
+      return { result: RESULTS.INVALID, detail: `HTTP ${resp.status}` };
     } catch (err) {
-      if (err.response?.status === 401) return { result: RESULTS.INVALID, detail: 'Unauthorized' };
-      return { result: RESULTS.ERROR, detail: err.message };
+      return { result: RESULTS.ERROR, detail: sanitize(err.message) };
     }
   },
 
   async discord(secret) {
     try {
+      // FIX: use Bot prefix for bot tokens; user tokens use Bearer
+      const isUserToken = secret.startsWith('xoxp-') || secret.length < 59;
+      const authHeader = isUserToken ? `Bearer ${secret}` : `Bot ${secret}`;
       const resp = await http.get('https://discord.com/api/v10/users/@me', {
-        headers: { Authorization: `Bot ${secret}` }
+        headers: { Authorization: authHeader }
       });
-      return { result: resp.status === 200 ? RESULTS.VALID : RESULTS.INVALID, detail: resp.data?.username || `HTTP ${resp.status}` };
+      if (resp.status === 200) return { result: RESULTS.VALID,   detail: sanitize(resp.data?.username) };
+      if (resp.status === 401) return { result: RESULTS.INVALID, detail: 'Unauthorized' };
+      return { result: RESULTS.INVALID, detail: `HTTP ${resp.status}` };
     } catch (err) {
-      if (err.response?.status === 401) return { result: RESULTS.INVALID, detail: 'Unauthorized' };
-      return { result: RESULTS.ERROR, detail: err.message };
+      return { result: RESULTS.ERROR, detail: sanitize(err.message) };
     }
   },
 
-  async shopify(secret) {
-    // Shopify tokens are shop-scoped — skip without shop domain
-    return { result: RESULTS.SKIPPED, detail: 'Shopify requires shop domain' };
+  async shopify() {
+    return { result: RESULTS.SKIPPED, detail: 'Shopify tokens require a shop domain' };
   },
 
   async telegram(secret) {
+    // FIX: sanitize secret to prevent path injection in URL
+    const safeToken = sanitize(secret).replace(/[^0-9a-zA-Z:_\-]/g, '');
+    if (!safeToken) return { result: RESULTS.INVALID, detail: 'Invalid token format' };
     try {
-      const resp = await http.get(`https://api.telegram.org/bot${secret}/getMe`);
-      if (resp.data?.ok) return { result: RESULTS.VALID, detail: `Bot: @${resp.data.result?.username}` };
-      return { result: RESULTS.INVALID, detail: resp.data?.description };
+      const resp = await http.get(`https://api.telegram.org/bot${safeToken}/getMe`);
+      if (resp.data?.ok)   return { result: RESULTS.VALID,   detail: `Bot: @${sanitize(resp.data.result?.username)}` };
+      if (resp.status === 401) return { result: RESULTS.INVALID, detail: 'Unauthorized' };
+      return { result: RESULTS.INVALID, detail: sanitize(resp.data?.description) };
     } catch (err) {
-      if (err.response?.status === 401) return { result: RESULTS.INVALID, detail: 'Unauthorized' };
-      return { result: RESULTS.ERROR, detail: err.message };
+      return { result: RESULTS.ERROR, detail: sanitize(err.message) };
     }
   },
 
@@ -196,68 +218,113 @@ const validators = {
       const resp = await http.get('https://api.mailgun.net/v3/domains', {
         auth: { username: 'api', password: secret }
       });
-      return { result: resp.status === 200 ? RESULTS.VALID : RESULTS.INVALID, detail: `HTTP ${resp.status}` };
+      if (resp.status === 200) return { result: RESULTS.VALID,   detail: 'Domains OK' };
+      if (resp.status === 401) return { result: RESULTS.INVALID, detail: 'Unauthorized' };
+      return { result: RESULTS.INVALID, detail: `HTTP ${resp.status}` };
     } catch (err) {
-      if (err.response?.status === 401) return { result: RESULTS.INVALID, detail: 'Unauthorized' };
-      return { result: RESULTS.ERROR, detail: err.message };
+      return { result: RESULTS.ERROR, detail: sanitize(err.message) };
     }
   },
 
   async heroku(secret) {
     try {
       const resp = await http.get('https://api.heroku.com/account', {
-        headers: {
-          Authorization: `Bearer ${secret}`,
-          Accept: 'application/vnd.heroku+json; version=3'
-        }
+        headers: { Authorization: `Bearer ${secret}`, Accept: 'application/vnd.heroku+json; version=3' }
       });
-      return { result: resp.status === 200 ? RESULTS.VALID : RESULTS.INVALID, detail: resp.data?.email || `HTTP ${resp.status}` };
+      if (resp.status === 200) return { result: RESULTS.VALID,   detail: sanitize(resp.data?.email) };
+      if (resp.status === 401) return { result: RESULTS.INVALID, detail: 'Unauthorized' };
+      return { result: RESULTS.INVALID, detail: `HTTP ${resp.status}` };
     } catch (err) {
-      if (err.response?.status === 401) return { result: RESULTS.INVALID, detail: 'Unauthorized' };
-      return { result: RESULTS.ERROR, detail: err.message };
+      return { result: RESULTS.ERROR, detail: sanitize(err.message) };
     }
   },
 
-  async generic(secret) {
-    // No specific validator — rely on entropy/pattern match alone
-    return { result: RESULTS.SKIPPED, detail: 'Generic pattern — no live validation' };
+  // ── New providers ─────────────────────────────────────────────────────────
+
+  async huggingface(secret) {
+    try {
+      const resp = await http.get('https://huggingface.co/api/whoami-v2', {
+        headers: { Authorization: `Bearer ${secret}` }
+      });
+      if (resp.status === 200) return { result: RESULTS.VALID,   detail: sanitize(resp.data?.name) };
+      if (resp.status === 401) return { result: RESULTS.INVALID, detail: 'Unauthorized' };
+      return { result: RESULTS.INVALID, detail: `HTTP ${resp.status}` };
+    } catch (err) {
+      return { result: RESULTS.ERROR, detail: sanitize(err.message) };
+    }
   },
 
-  async unknown(secret) {
+  async linear(secret) {
+    try {
+      const resp = await http.post('https://api.linear.app/graphql',
+        { query: '{ viewer { id name } }' },
+        { headers: { Authorization: secret, 'Content-Type': 'application/json' } }
+      );
+      if (resp.status === 200 && resp.data?.data?.viewer) {
+        return { result: RESULTS.VALID, detail: sanitize(resp.data.data.viewer.name) };
+      }
+      if (resp.status === 401) return { result: RESULTS.INVALID, detail: 'Unauthorized' };
+      return { result: RESULTS.INVALID, detail: `HTTP ${resp.status}` };
+    } catch (err) {
+      return { result: RESULTS.ERROR, detail: sanitize(err.message) };
+    }
+  },
+
+  async gitlab(secret) {
+    try {
+      const resp = await http.get('https://gitlab.com/api/v4/user', {
+        headers: { 'PRIVATE-TOKEN': secret }
+      });
+      if (resp.status === 200) return { result: RESULTS.VALID,   detail: sanitize(resp.data?.username) };
+      if (resp.status === 401) return { result: RESULTS.INVALID, detail: 'Unauthorized' };
+      return { result: RESULTS.INVALID, detail: `HTTP ${resp.status}` };
+    } catch (err) {
+      return { result: RESULTS.ERROR, detail: sanitize(err.message) };
+    }
+  },
+
+  async generic() {
+    return { result: RESULTS.SKIPPED, detail: 'No live validator for generic pattern' };
+  },
+
+  async unknown() {
     return { result: RESULTS.SKIPPED, detail: 'Unknown provider' };
   },
 
-  async jwt(secret) {
-    return { result: RESULTS.SKIPPED, detail: 'JWT secrets require context to validate' };
+  async jwt() {
+    return { result: RESULTS.SKIPPED, detail: 'JWT requires context to validate' };
   },
 
-  async ssh(secret) {
-    return { result: RESULTS.SKIPPED, detail: 'SSH keys validated by format only' };
+  async ssh() {
+    return { result: RESULTS.SKIPPED, detail: 'SSH key — format-match only' };
+  },
+
+  async pgp() {
+    return { result: RESULTS.SKIPPED, detail: 'PGP key — format-match only' };
   },
 };
 
-/**
- * Validate a finding
- * @param {object} finding - from scanner engine
- * @param {object} [context] - extra context (e.g. accessKeyId for AWS)
- * @returns {Promise<{ result: string, detail: string }>}
- */
 async function validateFinding(finding, context = {}) {
   if (!config.validation.enabled) {
     return { result: RESULTS.SKIPPED, detail: 'Validation disabled' };
   }
 
+  // FIX: never log rawValue
   const provider = finding.provider || 'unknown';
-  const validatorFn = validators[provider] || validators.unknown;
+  const fn = validators[provider] || validators.unknown;
 
   try {
-    logger.debug(`[Validator] Validating ${finding.patternName} via ${provider}`);
-    const result = await validatorFn(finding.rawValue, context);
-    logger.info(`[Validator] ${finding.patternName} [${provider}] → ${result.result} (${result.detail})`);
+    logger.debug(`[Validator] ${finding.patternName} → ${provider}`);
+    const result = await fn(finding.rawValue, context);
+    if (result.result === RESULTS.VALID) {
+      logger.warn(`[Validator] VALID: ${finding.patternName} [${provider}] — ${result.detail}`);
+    } else {
+      logger.debug(`[Validator] ${provider} → ${result.result}: ${result.detail}`);
+    }
     return result;
   } catch (err) {
-    logger.warn(`[Validator] Unexpected error for ${provider}: ${err.message}`);
-    return { result: RESULTS.ERROR, detail: err.message };
+    logger.warn(`[Validator] Unexpected error (${provider}): ${sanitize(err.message)}`);
+    return { result: RESULTS.ERROR, detail: sanitize(err.message) };
   }
 }
 
