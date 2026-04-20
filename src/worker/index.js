@@ -30,8 +30,13 @@ const { annotateWithContext } = require('../scanner/context-analyzer');
 const { validateFinding, RESULTS } = require('../validator');
 const StreamValidator    = require('../validator/stream-validator');
 const { getDB }          = require('../db');
+const { getVault }       = require('../db/vault');
 const { getClient }      = require('../utils/github-client');
 const { getNotifier }    = require('../notifications');
+const { getAllowlist }   = require('../utils/allowlist');
+const { getBlame }       = require('../scanner/blame');
+const GistScanner        = require('../scanner/gist-scanner');
+const { getRevocationGuide } = require('../scanner/revocation-guide');
 const Reporter           = require('../reporter');
 const APIServer          = require('../api/server');
 const { sha256 }         = require('../utils/hash');
@@ -51,6 +56,9 @@ class Worker {
     this.reporter     = new Reporter('./reports');
     this.notifier     = getNotifier();
     this.client       = getClient();
+    this.vault        = getVault();
+    this.allowlist    = getAllowlist();
+    this.gistScanner  = new GistScanner();
     this.apiServer    = null;
     this.running      = false;
 
@@ -94,6 +102,12 @@ class Worker {
     this._runSearchScanner();
     setInterval(() => this._runSearchScanner(), 30 * 60_000);
 
+    // Scan public Gists every 15 min
+    if (process.env.GITHUB_TOKEN) {
+      setTimeout(() => this._runGistScanner(), 30_000);
+      setInterval(() => this._runGistScanner(), 15 * 60_000);
+    }
+
     // Start queue consumer
     this._consumeLoop();
 
@@ -135,8 +149,40 @@ class Worker {
 
   // ── Event Handler ──────────────────────────────────────────────────────────
 
+  async _runGistScanner() {
+    logger.info('[Worker] Scanning public Gists...');
+    try {
+      const findings = await this.gistScanner.scanPublicGists(2);
+      for (const f of findings) {
+        const sv = new StreamValidator({
+          onValid: async (finding, validation) => {
+            this.stats.valid++;
+            const record = this._buildRecord(
+              { repoName: finding.repoName, repoUrl: finding.repoUrl },
+              finding, validation
+            );
+            await this.db.insertFinding(record);
+            this.vault.save({ ...finding, validationDetail: validation.detail });
+            await this.notifier.alert({ ...record, repoUrl: finding.repoUrl }, true);
+            logger.warn(`!! GIST LIVE SECRET! Gist=${finding.repoName} Provider=${finding.provider}`);
+          },
+          onFinding: () => {}
+        });
+        sv.beginRepo(f.repoName);
+        await sv.notifyFinding(f);
+      }
+    } catch (err) {
+      logger.warn(`[Worker] Gist scanner error: ${err.message}`);
+    }
+  }
+
   async _handlePolledRepo(event) {
     this.stats.polled++;
+    // Allowlist check
+    if (this.allowlist.isAllowlisted(event.repoName)) {
+      logger.debug(`[Worker] Skipping allowlisted repo: ${event.repoName}`);
+      return;
+    }
     const { allowed, priority } = classifyRepo(event);
     if (!allowed) return;
 
@@ -203,18 +249,45 @@ class Worker {
     // ── Set up streaming validator (fires validation mid-scan on hits) ──────
     const streamValidator = new StreamValidator({
       onValid: async (finding, validation) => {
-        // VALID secret found mid-scan — alert immediately, don't wait for scan end
+        // VALID secret found mid-scan — alert immediately
         this.stats.valid++;
         const record = this._buildRecord(item, finding, validation);
         await this.db.insertFinding(record);
+
+        // Save encrypted to vault
+        this.vault.save({
+          ...finding,
+          repoName: item.repoName,
+          validationDetail: validation.detail,
+          secretHash: record.secretHash
+        });
+
+        // Get blame info (who committed it)
+        let blameInfo = null;
+        try {
+          blameInfo = await getBlame(item.repoName, finding.filePath, finding.lineNumber);
+        } catch {}
+
+        // Get revocation guide
+        const guide = getRevocationGuide(finding.provider);
+
         logger.warn(
           `!! LIVE SECRET FOUND! Repo=${item.repoName} ` +
           `Provider=${finding.provider} Pattern=${finding.patternName} ` +
           `File=${finding.filePath}` +
           (finding.isHistorical ? ' [HISTORICAL]' : '') +
+          (blameInfo ? ` | Author=${blameInfo.authorName} <${blameInfo.authorEmail}>` : '') +
           ` | ${validation.detail}`
         );
-        await this.notifier.alert({ ...record, repoUrl: item.repoUrl }, true);
+        logger.warn(`   Severity: ${guide.severity} | Revoke: ${guide.revokeUrl || 'see provider docs'}`);
+
+        await this.notifier.alert({
+          ...record,
+          repoUrl: item.repoUrl,
+          blameInfo,
+          revocationUrl: guide.revokeUrl,
+          severity: guide.severity
+        }, true);
         if (this.apiServer) this.apiServer.pushFinding(record);
       },
       onFinding: (finding, validation) => {

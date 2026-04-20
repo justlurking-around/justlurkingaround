@@ -98,6 +98,18 @@ async function mainMenu() {
           value: 'leaks'
         },
         {
+          name: `${chalk.magenta('>>')} Secret Vault`,
+          value: 'vault'
+        },
+        {
+          name: `${chalk.yellow('>>')} Allowlist / Denylist`,
+          value: 'allowlist'
+        },
+        {
+          name: `${chalk.cyan('>>')} Scan GitHub Gists`,
+          value: 'gists'
+        },
+        {
           name: `${chalk.white('>>')} About / Help`,
           value: 'about'
         },
@@ -120,6 +132,9 @@ async function mainMenu() {
       case 'database':     await menuDatabase();     break;
       case 'validate':     await menuValidate();     break;
       case 'leaks':        await menuLeaks();        break;
+      case 'vault':        await menuVault();        break;
+      case 'allowlist':    await menuAllowlist();    break;
+      case 'gists':        await menuGists();        break;
       case 'about':        await menuAbout();        break;
       case 'exit':
         console.log(chalk.cyan('\n  Goodbye!\n'));
@@ -936,6 +951,237 @@ async function menuAbout() {
   console.log('');
 
   console.log(chalk.bold('  License: MIT'));
+  console.log('');
+  await pause();
+}
+
+// ── Secret Vault ─────────────────────────────────────────────────────────────
+
+async function menuVault() {
+  section('>> Secret Vault (Encrypted Storage)');
+  console.log('');
+
+  const { getVault } = require('../db/vault');
+  const vault = getVault();
+  const count = vault.count();
+  const hasPw = !!process.env.VAULT_PASSWORD;
+
+  console.log(`  Vault file  : ${chalk.cyan(process.env.VAULT_FILE || './data/vault.enc.jsonl')}`);
+  console.log(`  Encryption  : ${hasPw ? chalk.green('AES-256-GCM (password set)') : chalk.yellow('No password — set VAULT_PASSWORD')}`);
+  console.log(`  Entries     : ${chalk.cyan(count)}`);
+  console.log('');
+
+  const { action } = await inquirer.prompt([{
+    type: 'list', name: 'action',
+    message: 'Vault options:',
+    loop: false,
+    choices: [
+      { name: 'View decrypted entries',   value: 'view'   },
+      { name: 'Set vault password',        value: 'setpw'  },
+      { name: 'Export to JSON file',       value: 'export' },
+      { name: chalk.gray('<- Back'),        value: 'back'   },
+    ]
+  }]);
+
+  if (action === 'back') return;
+
+  if (action === 'setpw') {
+    const { pw } = await inquirer.prompt([{
+      type: 'password', name: 'pw', mask: '*',
+      message: 'Vault password (min 8 chars):',
+      validate: v => v.length >= 8 || 'Too short'
+    }]);
+    process.env.VAULT_PASSWORD = pw;
+    store.set('vaultPasswordHint', 'set-in-session');
+    success('Vault password set for this session.');
+    dim('  Add VAULT_PASSWORD=yourpassword to .env to persist.');
+  }
+
+  if (action === 'view' || action === 'export') {
+    const pw = process.env.VAULT_PASSWORD;
+    if (!pw && count > 0) {
+      warn('No VAULT_PASSWORD set. Entries may be unencrypted or unreadable.');
+    }
+    const entries = vault.list(pw);
+    if (!entries.length) { warn('Vault is empty.'); await pause(); return; }
+
+    if (action === 'export') {
+      const outPath = './data/vault-export.json';
+      const n = vault.export(pw, outPath);
+      success(`Exported ${n} entries to ${outPath}`);
+    } else {
+      console.log('');
+      console.log(chalk.red.bold(`  ${entries.length} vault entry(ies)\n`));
+      for (const e of entries.slice(0, 20)) {
+        const d = e.decrypted;
+        if (d) {
+          console.log(`  ${chalk.red(d.provider?.padEnd(12))} ${chalk.cyan(d.repoName?.substring(0,30).padEnd(32))} ${chalk.gray(d.filePath?.substring(0,20))}`);
+          console.log(chalk.gray(`    Key: ${d.rawValue?.substring(0,8)}...${d.rawValue?.slice(-4)}  Entropy:${d.entropy}  ${d.savedAt?.substring(0,10)}`));
+        } else {
+          console.log(chalk.gray(`  [encrypted] ${e.repoName} / ${e.provider} — wrong password?`));
+        }
+      }
+      if (entries.length > 20) dim(`  ...and ${entries.length - 20} more`);
+    }
+  }
+
+  console.log('');
+  await pause();
+}
+
+// ── Allowlist / Denylist ───────────────────────────────────────────────
+
+async function menuAllowlist() {
+  section('>> Allowlist / Denylist');
+  console.log('');
+
+  const { getAllowlist } = require('../utils/allowlist');
+  const al = getAllowlist();
+  const summary = al.summary();
+
+  console.log(`  Allowlist: ${summary.allowlist.repos} repos, ${summary.allowlist.orgs} orgs, ${summary.allowlist.patterns} patterns`);
+  console.log(`  Denylist : ${summary.denylist.repos} repos, ${summary.denylist.orgs} orgs`);
+  console.log('');
+  console.log(chalk.gray('  Allowlist = always SKIP these repos/orgs'));
+  console.log(chalk.gray('  Denylist  = always FORCE SCAN these repos/orgs'));
+  console.log('');
+
+  const { action } = await inquirer.prompt([{
+    type: 'list', name: 'action',
+    message: 'Options:',
+    loop: false,
+    choices: [
+      { name: 'Add repo to allowlist  (skip it)', value: 'allow_add'  },
+      { name: 'Add repo to denylist   (force scan)', value: 'deny_add' },
+      { name: 'View all entries',                 value: 'view'     },
+      { name: chalk.gray('<- Back'),               value: 'back'     },
+    ]
+  }]);
+
+  if (action === 'back') return;
+
+  if (action === 'allow_add' || action === 'deny_add') {
+    const { repoName } = await inquirer.prompt([{
+      type: 'input', name: 'repoName',
+      message: 'GitHub repo (owner/repo):',
+      validate: v => v.includes('/') || 'Format: owner/repo'
+    }]);
+    if (action === 'allow_add') {
+      al.addAllowlistRepo(repoName.trim());
+      success(`Added to allowlist: ${repoName}`);
+    } else {
+      al.addDenylistRepo(repoName.trim());
+      success(`Added to denylist: ${repoName}`);
+    }
+  }
+
+  if (action === 'view') {
+    const { allowlist, denylist } = al.getAll();
+    console.log('');
+    console.log(chalk.bold('  ALLOWLIST (skip):'));
+    (allowlist.repos || []).forEach(r => dim(`  - ${r}`));
+    (allowlist.orgs  || []).forEach(o => dim(`  - org: ${o}`));
+    if (!allowlist.repos?.length && !allowlist.orgs?.length) dim('  (empty)');
+    console.log('');
+    console.log(chalk.bold('  DENYLIST (force scan):'));
+    (denylist.repos || []).forEach(r => dim(`  - ${r}`));
+    if (!denylist.repos?.length) dim('  (empty)');
+  }
+
+  console.log('');
+  await pause();
+}
+
+// ── Gist Scanner ──────────────────────────────────────────────────────────
+
+async function menuGists() {
+  section('>> Scan GitHub Gists');
+  console.log('');
+  console.log(chalk.gray('  Scans public GitHub Gists for exposed credentials.'));
+  console.log(chalk.gray('  Gists are a major source of accidental .env leaks.'));
+  console.log('');
+
+  const { action } = await inquirer.prompt([{
+    type: 'list', name: 'action',
+    message: 'Scan:',
+    loop: false,
+    choices: [
+      { name: 'Recent public gists (1 page = 30)',  value: 'public1' },
+      { name: 'Recent public gists (3 pages = 90)', value: 'public3' },
+      { name: 'Specific user gists',                value: 'user'    },
+      { name: chalk.gray('<- Back'),                 value: 'back'    },
+    ]
+  }]);
+
+  if (action === 'back') return;
+
+  applyToEnv();
+
+  let username = null;
+  if (action === 'user') {
+    const { u } = await inquirer.prompt([{
+      type: 'input', name: 'u',
+      message: 'GitHub username:',
+      validate: v => !!v.trim() || 'Required'
+    }]);
+    username = u.trim();
+  }
+
+  const pages = action === 'public3' ? 3 : 1;
+  const spinner = ora('Scanning gists...').start();
+
+  try {
+    const GistScanner = require('../scanner/gist-scanner');
+    const { validateFinding, RESULTS } = require('../validator');
+    const { getDB } = require('../db');
+    const { getVault } = require('../db/vault');
+    const { sha256 } = require('../utils/hash');
+
+    const gs = new GistScanner();
+    const findings = username
+      ? await gs.scanUserGists(username)
+      : await gs.scanPublicGists(pages);
+
+    spinner.text = `Validating ${findings.length} findings...`;
+    const db    = await getDB();
+    const vault = getVault();
+    const valid = [];
+
+    for (const f of findings) {
+      const validation = await validateFinding(f);
+      const record = {
+        repoName: f.repoName, filePath: f.filePath,
+        patternId: f.patternId, patternName: f.patternName,
+        provider: f.provider, secretHash: sha256(f.rawValue),
+        value: f.value, entropy: f.entropy, lineNumber: f.lineNumber,
+        matchContext: f.matchContext,
+        validationResult: validation.result, validationDetail: validation.detail,
+        detectedAt: f.detectedAt, isHistorical: false
+      };
+      await db.insertFinding(record);
+      if (validation.result === RESULTS.VALID) {
+        vault.save({ ...f, validationDetail: validation.detail, secretHash: record.secretHash });
+        valid.push(record);
+      }
+    }
+
+    spinner.stop();
+    console.log('');
+    console.log(chalk.yellow(`  ${findings.length} findings from gists`));
+    if (valid.length) {
+      console.log(chalk.red.bold(`  !! ${valid.length} LIVE secret(s) found in gists!`));
+      printTable(valid, [
+        { key: 'provider',    label: 'PROVIDER', width: 12 },
+        { key: 'patternName', label: 'PATTERN',  width: 20 },
+        { key: 'repoName',    label: 'GIST',     width: 30 },
+      ]);
+    } else {
+      success('No live secrets found in gists.');
+    }
+  } catch (err) {
+    spinner.fail(`Error: ${err.message}`);
+  }
+
   console.log('');
   await pause();
 }

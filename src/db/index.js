@@ -295,6 +295,7 @@ async function getDB() {
   const dbConf = config.database;
   const hasPg  = !!(process.env.DATABASE_URL || dbConf.connectionString || (dbConf.password && dbConf.host !== 'localhost'));
 
+  // 1. Try PostgreSQL
   if (hasPg) {
     try {
       const pg = new PostgresDB();
@@ -303,10 +304,25 @@ async function getDB() {
       logger.info('[DB] Using PostgreSQL');
       return _db;
     } catch (err) {
-      logger.warn(`[DB] PostgreSQL unavailable (${err.message}) — falling back to JSONL`);
+      logger.warn(`[DB] PostgreSQL unavailable (${err.message}) — trying SQLite`);
     }
   }
 
+  // 2. Try SQLite (preferred local backend — fast, zero-config, Termux-safe)
+  if (process.env.USE_JSONL !== 'true') {
+    try {
+      const SQLiteDB = require('./sqlite');
+      const sqlite = new SQLiteDB();
+      await sqlite.migrate();
+      _db = sqlite;
+      logger.info('[DB] Using SQLite');
+      return _db;
+    } catch (err) {
+      logger.warn(`[DB] SQLite unavailable (${err.message}) — falling back to JSONL`);
+    }
+  }
+
+  // 3. JSONL fallback (always works, even on read-only FS)
   const jsonl = new JsonlDB();
   await jsonl.migrate();
   _db = jsonl;
