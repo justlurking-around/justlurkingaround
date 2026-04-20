@@ -2,6 +2,44 @@
 
 All notable changes are documented here.
 
+## [2.2.0] — 2026-04-20 — audit findings — 4 real bugs fixed, 10 false positives cleared
+
+**Type:** 🐛 Fixed  
+**Commit:** `9fd6114`  
+
+**Tags:** Database · Vault/Encryption · Streaming Validation · False Positive Reduction · Interactive Menu · Detection Patterns
+
+### Details
+
+- Bugs fixed after full autonomous + manual audit:
+  1. .gitignore: *.db and *.db-shm / *.db-wal not excluded
+- SQLite database file could accidentally be committed to the repo
+- Now excluded: *.db, *.db-shm, *.db-wal, .heal_test_push
+  2. scripts/update-changelog.js: JSON.parse(readFileSync) without try/catch
+- If package.json is malformed or missing, entire changelog script would
+  throw uncaught exception. Now wrapped in try/catch with safe fallback.
+  3. src/poller/events.js: parseInt(serverPollInterval) NaN not guarded
+- If GitHub sends a malformed X-Poll-Interval header, parseInt returns NaN
+- NaN * 1000 = NaN, which would corrupt this.pollInterval silently.
+- Now guarded: !isNaN(parsed) && parsed > 0 before applying.
+  4. src/db/sqlite.js: DB_PATH computed at module load time (not instance)
+- If SQLITE_PATH env var was set after require(), the old path was used.
+- Fixed: getDbPath() function called per-instance in migrate() and _save()
+  so the env var is always read at the time the DB is opened.
+- False positives cleared (10):
+- getClient() / getQueue() 'missing await' — both are synchronous
+- migrate.js process.exit() — correct for CLI entry point
+- node-forge ^1.4.0 — safe (CVEs were in <1.3.1)
+- 0 empty catch blocks — static scanner over-counted
+
+### Files Changed
+
+- **Config**: `.gitignore`
+- **Scripts**: `update-changelog.js`
+- **Database**: `sqlite.js`
+- **Poller**: `events.js`
+
+---
 ## [2.2.0] — 2026-04-20 — remove deprecated npm crypto package (use Node.js built-in) [heal]
 
 **Type:** 🐛 Fixed  
