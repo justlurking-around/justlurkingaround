@@ -2,6 +2,20 @@
 
 All notable changes are documented here.
 
+## [2.2.0] — 2026-04-20 — security wiring + clean log output
+
+**Type:** 🐛 Fixed  
+**Commit:** `2b6758b`  
+
+**Tags:** Security
+
+### Files Changed
+
+- **CLI / Menu**: `menu.js`
+- **Utilities**: `logger.js`
+- **Worker**: `index.js`
+
+---
 ## [2.2.0] — 2026-04-20 — heal daemon + security hardening
 
 **Type:** 🐛 Fixed  
