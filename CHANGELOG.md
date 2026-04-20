@@ -2,6 +2,18 @@
 
 All notable changes are documented here.
 
+## [2.2.0] — 2026-04-20 — verify autonomous push works
+
+**Type:** 🧪 Tests  
+**Commit:** `a4d1f58`  
+
+
+
+### Files Changed
+
+- **Other**: `.heal_test_push`
+
+---
 ## [2.2.0] — 2026-04-20 — autonomous self-healing system (scripts/heal.js)
 
 **Type:** ✨ Added  
