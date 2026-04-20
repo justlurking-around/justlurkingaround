@@ -17,6 +17,9 @@
     "heal": "node scripts/heal.js",
     "heal:watch": "WATCH_PROCESS=true node scripts/heal.js",
     "heal:dry": "AUTO_FIX_DEPS=false AUTO_UPDATE=false node scripts/heal.js",
+    "sanitize": "node scripts/sanitize.js",
+    "sanitize:fix": "node scripts/sanitize.js --fix",
+    "predeploy": "node scripts/sanitize.js --strict",
     "prepare": "node scripts/install-hooks.js || true"
   },
   "keywords": [

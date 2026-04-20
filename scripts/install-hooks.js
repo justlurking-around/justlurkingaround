@@ -37,9 +37,18 @@ node "$(git rev-parse --show-toplevel)/scripts/update-changelog.js"
 // ── pre-push: stage CHANGELOG.md if it was updated ───────────────────────────
 
 write('pre-push', `#!/bin/sh
-# If CHANGELOG.md was modified by post-commit hook, commit it now
 ROOT="$(git rev-parse --show-toplevel)"
 
+# 1. Run sanitizer — block push if real credentials found
+echo "[pre-push] Running sanitization check..."
+node "$ROOT/scripts/sanitize.js" --strict
+SANITIZE_EXIT=$?
+if [ $SANITIZE_EXIT -ne 0 ]; then
+  echo "[pre-push] BLOCKED: sanitize check failed. Fix issues before pushing."
+  exit 1
+fi
+
+# 2. Commit auto-updated CHANGELOG.md if modified
 if ! git diff --quiet "$ROOT/CHANGELOG.md" 2>/dev/null; then
   echo "[pre-push] Committing auto-updated CHANGELOG.md..."
   git add "$ROOT/CHANGELOG.md"
