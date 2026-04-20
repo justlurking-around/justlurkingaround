@@ -2,6 +2,18 @@
 
 All notable changes are documented here.
 
+## [2.2.0] — 2026-04-20 — cleanup heal test
+
+**Type:** 🔧 Chore  
+**Commit:** `c41377b`  
+
+
+
+### Files Changed
+
+- **Other**: `.heal_commit_test`
+
+---
 ## [2.2.0] — 2026-04-20 — heal commit test
 
 **Type:** 🧪 Tests  
