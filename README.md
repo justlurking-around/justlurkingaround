@@ -1,63 +1,107 @@
 # 🔍 AI-Generated GitHub Secret Scanner
 
-Real-time scanner that monitors the GitHub Events API, detects AI-generated repositories, and scans them for exposed secrets (API keys, tokens, credentials).
+> Real-time scanner that monitors GitHub for AI-generated repositories and scans them for exposed secrets — API keys, tokens, credentials — with live validation.
 
-![Node.js](https://img.shields.io/badge/node-%3E%3D16-brightgreen) ![License](https://img.shields.io/badge/license-MIT-blue) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows%20%7C%20Termux-lightgrey)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D16-brightgreen)](https://nodejs.org) [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE) [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows%20%7C%20Termux-lightgrey)](#installation)
+
+---
+
+## Why This Exists
+
+AI coding tools (bolt.new, Lovable, Cursor, v0.dev, Replit Agent) are generating thousands of repos daily. Many of them ship with `.env` files, hardcoded API keys, and database credentials committed to public GitHub — because the AI generated the code with the credentials already baked in, and the developer never noticed.
+
+This scanner catches them in real-time.
 
 ---
 
 ## Features
 
-- **Real-time polling** — GitHub Events API with ETag caching + X-Poll-Interval respect  
-- **AI repo detection** — `.cursorrules`, `CLAUDE.md`, bolt.new, lovable, v0.dev, Replit Agent and 20+ more signals  
-- **500+ secret patterns** — AWS, OpenAI, Stripe, GitHub, Slack, GCP, Azure, Discord, Telegram, and 80+ providers  
-- **Entropy analysis** — Shannon entropy ≥ 4.0 catches secrets missed by regex  
-- **Live validation** — Tests secrets against real APIs (OpenAI, GitHub, Stripe, Slack, Telegram, etc.)  
-- **Deduplication** — SHA-256 hashing prevents rescanning identical files  
-- **Priority queue** — 1/5/10/25 min intervals based on repo activity  
-- **Dual database** — PostgreSQL for production, JSONL flat-file fallback (works on Termux)  
-- **Cross-platform CLI** — Linux, macOS, Windows, Termux (Android)  
-- **No mock data** — 100% real GitHub live data only
+| Feature | Details |
+|---------|---------|
+| **Real-time polling** | GitHub Events API with ETag + X-Poll-Interval |
+| **AI repo detection** | 20+ signals: `.cursorrules`, `CLAUDE.md`, bolt.new, lovable, v0.dev, Replit Agent, Cursor... |
+| **Surface scan** | Current HEAD — all scannable files, filtered for false positives |
+| **Deep history scan** | ALL branches + full commit history + dangling commits from force-pushes |
+| **Secret patterns** | 100+ named patterns + Shannon entropy ≥ 4.0 for unknown secrets |
+| **Live validation** | Tests secrets against real provider APIs |
+| **Pair matching** | AWS key+secret, Twilio SID+token — reduces false positives |
+| **Context scoring** | Variable name + file type + assignment context analysis |
+| **Priority queue** | 1/5/10/25 min intervals based on activity |
+| **Proactive search** | GitHub Code Search for known secret patterns in recent repos |
+| **Notifications** | Discord, Slack, Telegram, Generic Webhook |
+| **Reports** | JSON, Markdown, CSV, SARIF (GitHub Advanced Security compatible) |
+| **Web dashboard** | Real-time SSE feed, findings table, on-demand scan |
+| **REST API** | `/api/stats`, `/api/findings`, `/api/scan`, `/api/live` |
+| **Dual database** | PostgreSQL or JSONL flat-file (no setup needed) |
+| **Cross-platform** | Linux, macOS, Windows, Termux (Android) |
 
 ---
 
 ## Architecture
 
 ```
-src/
-├── poller/       # GitHub Events API poller (ETag, X-Poll-Interval)
-├── filters/      # Active-repo filter, AI detector, false-positive filter
-├── queue/        # Priority queue (in-memory or Redis)
-├── scanner/      # File tree fetcher, regex patterns, entropy analysis
-├── validator/    # Live API validation per provider
-├── db/           # PostgreSQL + JSONL fallback
-├── worker/       # Orchestration loop (background runner)
-└── cli/          # CLI tool (scan/stats/findings/validate)
+┌─────────────────────────────────────────────────────────────┐
+│                     Worker (Orchestrator)                     │
+├──────────────┬──────────────┬───────────────┬───────────────┤
+│ Events Poller│ Search Scanner│  Queue        │  API Server   │
+│ (real-time)  │ (proactive)   │  (priority)   │  (dashboard)  │
+└──────┬───────┴──────┬────────┴───────┬───────┴───────┬───────┘
+       │              │                │               │
+       ▼              ▼                ▼               ▼
+┌─────────────────────────────────────────────────────────────┐
+│              Scanner Engine (per repo)                       │
+│  ┌─────────────┐  ┌──────────────┐  ┌────────────────────┐ │
+│  │ Surface Scan │  │ History Scan │  │  AI Detector       │ │
+│  │ (HEAD files) │  │ (all branches│  │  (20+ signals)     │ │
+│  │              │  │  + diffs +   │  │                    │ │
+│  │              │  │  dangling)   │  │                    │ │
+│  └──────┬───────┘  └──────┬───────┘  └────────────────────┘ │
+│         └─────────────────┘                                   │
+│                    ▼                                          │
+│         ┌──────────────────────┐                            │
+│         │  Pattern + Entropy   │ ← 100+ providers            │
+│         │  Pair Matcher        │ ← AWS, Twilio, etc.          │
+│         │  Context Analyzer    │ ← variable names, file type  │
+│         │  False Positive Filter│                            │
+│         └──────────┬───────────┘                            │
+│                    ▼                                          │
+│         ┌──────────────────────┐                            │
+│         │  Validation Engine   │ ← live API calls            │
+│         │  (12+ providers)     │                            │
+│         └──────────┬───────────┘                            │
+└────────────────────┼────────────────────────────────────────┘
+                     ▼
+       ┌─────────────────────────────┐
+       │  Database  │  Notifier  │  Reporter  │
+       │ (PG/JSONL) │ (Discord/  │ (JSON/MD/  │
+       │            │  Slack/TG) │  CSV/SARIF)│
+       └─────────────────────────────┘
 ```
 
 ---
 
-## Quick Start
+## Installation
 
-### Prerequisites
-
-- Node.js ≥ 16
-- GitHub Personal Access Token ([create one](https://github.com/settings/tokens) — `public_repo` scope only)
-- Optional: PostgreSQL, Redis
-
-### Install
+### Linux / macOS
 
 ```bash
-# Clone
 git clone https://github.com/justlurking-around/justlurkingaround.git
 cd justlurkingaround
-
-# Install dependencies
 npm install
-
-# Configure
 cp .env.defaults .env
-# Edit .env and set GITHUB_TOKEN=ghp_your_token_here
+# Edit .env — add your GITHUB_TOKEN
+npm start
+```
+
+### Windows
+
+```powershell
+git clone https://github.com/justlurking-around/justlurkingaround.git
+cd justlurkingaround
+npm install
+copy .env.defaults .env
+# Edit .env in Notepad — add GITHUB_TOKEN
+npm start
 ```
 
 ### Termux (Android)
@@ -68,32 +112,54 @@ git clone https://github.com/justlurking-around/justlurkingaround.git
 cd justlurkingaround
 npm install
 cp .env.defaults .env
-nano .env   # set GITHUB_TOKEN
+nano .env          # add GITHUB_TOKEN
 npm start
 ```
 
 ---
 
-## Usage
+## Quick Start
 
-### Start real-time global scanner
+### 1. Get a GitHub Token
+
+Go to https://github.com/settings/tokens → Generate new token (classic)  
+Scope needed: `public_repo` (read-only is fine)
+
+### 2. Configure
 
 ```bash
-npm start
-# or
-node src/worker/index.js
-# or with token inline
-GITHUB_TOKEN=ghp_xxx npm start
+cp .env.defaults .env
 ```
 
-### CLI tool
+Minimum config in `.env`:
+```
+GITHUB_TOKEN=ghp_your_token_here
+```
+
+### 3. Start
 
 ```bash
-# Install globally
+# Start the worker + dashboard
+npm start
+
+# Dashboard: http://localhost:3000
+# Logs:      ./logs/scanner.log
+# Reports:   ./reports/
+```
+
+---
+
+## CLI Usage
+
+```bash
+# Install CLI globally
 npm install -g .
 
-# Scan a specific repo
+# Scan a specific repository (deep scan: surface + history)
 ai-scanner scan repo https://github.com/owner/repo
+
+# Scan with JSON output
+ai-scanner scan repo https://github.com/owner/repo --json
 
 # Start global real-time scanner
 ai-scanner scan global
@@ -101,114 +167,157 @@ ai-scanner scan global
 # View recent findings
 ai-scanner findings --limit 50
 
-# Show only live (validated) secrets
+# Only show live validated secrets
 ai-scanner findings --valid-only
 
-# Database stats
+# Database statistics
 ai-scanner stats
 
-# Validate a secret manually
-ai-scanner validate sk-proj-abcd1234 --provider openai
-
-# JSON output
-ai-scanner scan repo https://github.com/owner/repo --json
+# Validate a specific secret manually
+ai-scanner validate "sk-proj-abc123" --provider openai
+ai-scanner validate "ghp_abc123" --provider github
 ```
 
 ---
 
 ## Configuration
 
-All config via environment variables (`.env` file):
+All settings via `.env` file:
 
+### Required
+| Variable | Description |
+|----------|-------------|
+| `GITHUB_TOKEN` | GitHub PAT with `public_repo` scope |
+
+### Database (optional — JSONL fallback if not set)
 | Variable | Default | Description |
-|---|---|---|
-| `GITHUB_TOKEN` | *(required)* | GitHub PAT — `public_repo` scope |
-| `DATABASE_URL` | *(optional)* | PostgreSQL connection string |
-| `USE_REDIS` | `false` | Use Redis for queue |
-| `REDIS_URL` | `redis://localhost:6379` | Redis URL |
+|----------|---------|-------------|
+| `DATABASE_URL` | — | PostgreSQL connection string |
+| `DB_HOST` | `localhost` | PostgreSQL host |
+| `DB_NAME` | `ai_scanner` | Database name |
+
+### Notifications (optional)
+| Variable | Description |
+|----------|-------------|
+| `DISCORD_WEBHOOK_URL` | Discord channel webhook URL |
+| `SLACK_WEBHOOK_URL` | Slack incoming webhook URL |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token |
+| `TELEGRAM_CHAT_ID` | Telegram chat/channel ID |
+| `NOTIFY_WEBHOOK_URL` | Generic webhook for any service |
+
+### Scanner Behavior
+| Variable | Default | Description |
+|----------|---------|-------------|
 | `VALIDATE_SECRETS` | `true` | Run live API validation |
-| `LOG_LEVEL` | `info` | debug / info / warn / error |
-| `LOG_DIR` | `./logs` | Log file directory |
+| `ENABLE_API` | `true` | Enable web dashboard |
+| `API_PORT` | `3000` | Dashboard port |
+| `MAX_COMMITS_PER_BRANCH` | `50` | Git history depth |
+| `MAX_BRANCHES` | `10` | Branches to scan per repo |
+| `LOG_LEVEL` | `info` | `debug`/`info`/`warn`/`error` |
 
 ---
 
-## Secret Patterns (500+)
+## Detection Providers (100+ patterns)
 
-Provider categories:
+<details>
+<summary>Click to expand full provider list</summary>
 
 | Category | Providers |
-|---|---|
-| Cloud | AWS, GCP, Azure, Cloudflare, Heroku, Vercel, Netlify |
-| AI | OpenAI, Anthropic |
-| Payments | Stripe, Braintree, PayPal, Coinbase, Binance |
-| Messaging | Slack, Discord, Telegram, Twilio, SendGrid, Mailgun |
-| DevOps | GitHub, NPM, PyPI, Docker Hub, CircleCI |
-| DB/Infra | MongoDB, PostgreSQL, MySQL, Redis, RabbitMQ |
-| SaaS | Shopify, Salesforce, HubSpot, Intercom, Zendesk, Jira |
-| Analytics | Datadog, New Relic, Sentry, Amplitude, Segment, Mixpanel |
-| Auth | Okta, Auth0 |
-| Other | Airtable, Notion, Figma, Algolia, Contentful, Mapbox... |
+|----------|-----------|
+| **Cloud** | AWS (Access Key, Secret, Session Token, MWS), GCP (API Key, OAuth, Service Account, Private Key), Azure (Storage, SAS, Connection String, Client Secret), Cloudflare, Heroku, Vercel, Netlify |
+| **AI** | OpenAI (sk-proj, sk-..T3BlbkFJ), Anthropic, Firebase |
+| **Payments** | Stripe (live/test/restricted), Braintree, PayPal, Coinbase, Binance, Plaid |
+| **Messaging** | Slack (bot/user/workspace/webhook), Discord (bot/webhook), Telegram, Twilio, SendGrid, Mailgun, Mailchimp, Postmark, Mandrill, Pushover |
+| **DevOps** | GitHub (PAT, OAuth, App, Server tokens), NPM, PyPI, Docker Hub |
+| **Databases** | MongoDB (Atlas connection string), PostgreSQL, MySQL, Redis, RabbitMQ |
+| **SaaS** | Shopify (4 token types), Salesforce, HubSpot, Intercom, Zendesk, Jira/Atlassian, Linear, Airtable, Notion, Figma |
+| **Analytics** | Datadog, New Relic, Sentry (DSN), Amplitude, Segment, Mixpanel |
+| **Auth** | Okta, Auth0 |
+| **Storage** | Dropbox, Box, Cloudinary, AWS S3 |
+| **Maps** | Mapbox, Google Maps |
+| **Search** | Algolia, Elasticsearch |
+| **CMS** | Contentful |
+| **Keys** | SSH Private Keys (RSA/EC/DSA/OPENSSH), PGP Private Key Blocks |
+| **Generic** | JWT secrets, high-entropy strings, generic API keys, bearer tokens |
 
-Plus: SSH private keys, PGP blocks, JWT secrets, generic high-entropy analysis.
-
----
-
-## Validation
-
-Secrets are validated live against provider APIs:
-
-| Provider | Endpoint |
-|---|---|
-| OpenAI | `GET /v1/models` |
-| Anthropic | `GET /v1/models` |
-| GitHub | `GET /user` |
-| Stripe | `GET /v1/charges` |
-| Slack | `POST /api/auth.test` |
-| SendGrid | `GET /v3/user/account` |
-| Telegram | `GET /bot{token}/getMe` |
-| Mailgun | `GET /v3/domains` |
-| Heroku | `GET /account` |
-| NPM | `GET /-/whoami` |
-| Discord | `GET /api/v10/users/@me` |
-| AWS | STS `GetCallerIdentity` |
+</details>
 
 ---
 
-## Database
+## Deep Scan — What It Covers
 
-### PostgreSQL (production)
-```sql
--- repositories table: tracks every scanned repo
--- findings table: every detected secret with validation status
-```
-Run migrations:
-```bash
-npm run setup-db
-```
+Unlike basic scanners that only look at the current HEAD, this tool goes deeper:
 
-### JSONL fallback (no Postgres needed)
-When `DATABASE_URL` is not set, findings are saved to `./data/findings.jsonl` — works on Termux and local machines with no setup.
+1. **All branches** — not just `main`/`master`
+2. **Full commit history** — every commit, not just recent
+3. **Diff analysis** — scans only *added* lines (what was introduced)
+4. **Dangling commits** — commits force-pushed over but still accessible via GitHub's event API
+5. **Deleted files** — secrets in files that no longer exist in HEAD
+
+This matches techniques used by TruffleHog v3 and Neodyme's research on hidden GitHub commits.
 
 ---
 
-## False Positive Filtering
+## False Positive Reduction
 
-Automatically skips:
-- Test files (`*.test.js`, `*.spec.ts`, `__tests__/`)
-- Mock/fixture/sample/dummy data files
-- `.env.example`, `.env.sample`, `.env.template`
-- `node_modules/`, `vendor/`, `dist/`, `build/`
-- Binary files (images, archives, PDFs)
-- Placeholder values (`YOUR_API_KEY`, `xxx...`, `<TOKEN>`)
+Multi-layer FP filtering:
+1. **Path filter** — skips `test/`, `mock/`, `fixtures/`, `.env.example`, `node_modules/`, `dist/`
+2. **Dummy value filter** — skips `YOUR_API_KEY`, `xxx...`, `<TOKEN>`, `0000...`
+3. **Context analyzer** — variable name analysis (not a label/comment/description)
+4. **Pair matching** — AWS key+secret together = higher confidence
+5. **Entropy threshold** — Shannon entropy ≥ 4.0 for generic strings
 
 ---
 
-## Disclaimer
+## Reports
 
-This tool is for **security research and educational purposes only**. Do not use to access, store, or exploit credentials you do not own. Always follow responsible disclosure practices. The author is not responsible for misuse.
+Each scanned repo with findings gets reports in `./reports/`:
+
+| Format | File | Use |
+|--------|------|-----|
+| JSON | `*.json` | Machine-readable, full detail |
+| Markdown | `*.md` | Human-readable, GitHub-ready |
+| CSV | `*.csv` | Import to spreadsheets/SIEM |
+| SARIF | `*.sarif.json` | GitHub Advanced Security, VS Code, CI |
+
+---
+
+## Web Dashboard
+
+Start the scanner and open http://localhost:3000:
+
+- **Live feed** — real-time SSE stream of new findings
+- **Stats** — repos scanned, total findings, live secrets
+- **Findings table** — filterable by provider, status, repo
+- **On-demand scan** — paste any GitHub URL to scan immediately
+
+---
+
+## Responsible Disclosure
+
+This tool is for **security research and education only**.
+
+- Do not use to access systems you don't own
+- Do not store credentials you discover
+- If you find a live secret in the wild: notify the repo owner and provider
+- See [SECURITY.md](SECURITY.md) for full responsible disclosure policy
+
+---
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) — we welcome:
+- New provider patterns
+- New validators
+- AI signature improvements
+- Bug fixes
 
 ---
 
 ## License
 
-MIT © justlurking-around
+MIT © [justlurking-around](https://github.com/justlurking-around)
+
+---
+
+*Inspired by TruffleHog, Gitleaks, GitGuardian, and Neodyme's GitHub secrets research.*
