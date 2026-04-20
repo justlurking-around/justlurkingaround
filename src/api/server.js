@@ -42,6 +42,15 @@ class APIServer {
 
     // ── Health ──────────────────────────────────────────────────────────────
     app.get('/health', (req, res) => {
+      // Try to return the self-heal report if available
+      const healthFile = require('path').join(__dirname, '../../data/health.json');
+      const fs = require('fs');
+      if (fs.existsSync(healthFile)) {
+        try {
+          const data = JSON.parse(fs.readFileSync(healthFile, 'utf8'));
+          return res.json(data);
+        } catch {}
+      }
       res.json({ status: 'ok', timestamp: new Date().toISOString() });
     });
 
@@ -255,6 +264,7 @@ class APIServer {
       <div class="stat-card"><div class="label">Total Findings</div><div class="value" id="s-findings">—</div></div>
       <div class="stat-card danger"><div class="label">🚨 Live Secrets</div><div class="value" id="s-valid">—</div></div>
       <div class="stat-card"><div class="label">Queue Size</div><div class="value" id="s-queue">—</div></div>
+      <div class="stat-card" id="health-card"><div class="label">System Health</div><div class="value" id="s-health" style="font-size:18px">—</div></div>
     </div>
 
     <div class="section">
@@ -402,12 +412,30 @@ class APIServer {
       }
     }
 
+    // Load system health
+    async function loadHealth() {
+      try {
+        const r = await fetch('/health');
+        const d = await r.json();
+        const el = document.getElementById('s-health');
+        const card = document.getElementById('health-card');
+        const colors = { healthy:'#3fb950', degraded:'#d29922', vulnerable:'#f85149', crashed:'#f85149' };
+        el.textContent = (d.status || 'ok').toUpperCase();
+        el.style.color = colors[d.status] || '#3fb950';
+        if (d.vulnerabilities?.total > 0) {
+          card.title = 'Vulns: crit=' + d.vulnerabilities.critical + ' high=' + d.vulnerabilities.high;
+        }
+      } catch {}
+    }
+
     // Init
     loadStats();
     loadFindings();
+    loadHealth();
     connectSSE();
     setInterval(loadStats, 30_000);
     setInterval(loadFindings, 60_000);
+    setInterval(loadHealth, 5 * 60_000);
   </script>
 </body>
 </html>`;

@@ -23,4 +23,12 @@ if [ ! -d "node_modules" ]; then
   bash install-termux.sh
 fi
 
+# Start the self-healing daemon in background if not already running
+if [ "${DISABLE_HEAL:-false}" != "true" ]; then
+  if ! pgrep -f "scripts/heal.js" > /dev/null 2>&1; then
+    node scripts/heal.js > logs/heal.log 2>&1 &
+    echo "  [OK] Self-healing daemon started (PID $!)"
+  fi
+fi
+
 exec node src/cli/index.js "$@"
