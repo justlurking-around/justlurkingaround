@@ -1,85 +1,245 @@
 # Changelog
 
-All notable changes to AI Secret Scanner are documented here.
+All notable changes are documented here in reverse chronological order.
+Format: `[version] — date — summary`
 
 ---
 
-## [2.1.0] — 2026-04-20 — Security Audit & Bug Fix Release
+## [2.2.3] — 2026-04-20 — Fix wrong-directory user error
 
-### 🔒 Security Fixes
-- **SECURITY** `validator/index.js` — Telegram validator now sanitizes the bot token before embedding it in a URL to prevent path-injection via crafted secret values
-- **SECURITY** `validator/index.js` — Raw secret values (`rawValue`) are no longer included in any log output, error messages, or exception traces; all log paths now use redacted form only
-- **SECURITY** `validator/index.js` — `validateStatus: () => true` added to prevent axios from following error status codes as throw; all status codes handled explicitly
+### Problem
+Running `git pull` or `npm start` from `~` (home) instead of `~/justlurkingaround`
+caused two confusing errors:
+- `fatal: not a git repository`
+- `ENOENT: no such file or directory, open 'package.json'`
 
-### 🐛 Bug Fixes
+### Added
+- **`start.sh`** — universal launcher. Resolves its own location automatically.
+  Run from any directory: `bash ~/justlurkingaround/start.sh`
+- **`update.sh`** — universal updater. Runs `git pull` + `npm install --ignore-scripts`
+  from anywhere: `bash ~/justlurkingaround/update.sh`
+- **Shell aliases** injected by `install-termux.sh` into `~/.bashrc`:
+  - `scanner` → start from anywhere
+  - `scanner-update` → pull latest and reinstall
+  - `scanner-logs` → follow live log
 
-#### Scanner Engine (`src/scanner/engine.js`)
-- **FIX** `_matchPattern` — Regex objects were being reused across calls with the `g` flag, causing `lastIndex` to carry over and silently skip matches on subsequent scans
-- **FIX** `_entropyAnalysis` — `tokenRegex` shared across loop iterations caused stale `lastIndex` and missed tokens on lines after the first match
-- **FIX** `_scanFile` — Raw content URL incorrectly inherited `baseURL` from the GitHub API client; now always uses absolute URL with `baseURL: ''`
-- **FIX** `_getFileTree` — Truncated trees (repos > 100 000 blobs) now detected and warned; previously silently returned partial results
-- **FIX** `scannedHashes` moved from module-level to instance-level — module-level Set caused cross-scan dedup contamination in tests and multi-scanner scenarios
-- **PERF** `_entropyAnalysis` — Pre-compiled pattern regex array replaces per-token `PATTERNS.some(p => new RegExp(...))` in inner loop (O(n×m) → O(n))
-
-#### Git History Scanner (`src/history/git-history-scanner.js`)
-- **FIX** `scannedCommits` / `scannedBlobs` moved from module-level to instance-level Sets
-- **FIX** `_extractAddedLines` — `+++` diff file header lines no longer included in scanned text
-- **FIX** Per-branch commit cap (`MAX_COMMITS_PER_BRANCH`) was not enforced when GitHub returned more commits than requested
-- **FIX** Dangling commit scan now deduplicates SHAs before scanning; previously could re-scan the same commit multiple times from multiple push events
-- **PERF** Entropy dedup now uses pre-compiled pattern array (same fix as engine)
-
-#### Database Layer (`src/db/index.js`)
-- **FIX** `JsonlDB.upsertRepo` — Appended to repos file on every call, causing unbounded file growth on long-running scans; now compacts on `close()`
-- **FIX** `JsonlDB._loadFile` — Bad JSONL lines previously swallowed silently; now counts and logs them as warnings
-- **FIX** `PostgresDB` — Pool was never explicitly closed on process exit; now registers `process.once('exit')` shutdown hook
-- **FIX** `getRecentFindings` now accepts `filters` object (provider, status, repo) in both backends; previously only supported limit
-- **NEW** `getStats()` returns `topProviders` map; was referenced in worker/notifier but never computed
-
-#### Notification System (`src/notifications/index.js`)
-- **FIX** Rate limit window reset bug — `_windowStart` was never reset when the window expired, causing the counter to never reset after the first minute
-- **FIX** Telegram messages now hard-capped at 4 000 characters; previously messages > 4 096 chars caused Telegram API 400 errors
-- **FIX** Discord embed field `value` fields could be empty string, causing Discord API 400 errors; replaced with `'N/A'` fallback
-- **FIX** Notification channels were reloaded from `process.env` on every `alert()` call; now cached at construction time
-- **NEW** 1-retry with 2-second delay on notification failure before giving up
-
-#### GitHub Client (`src/utils/github-client.js`)
-- **FIX** Singleton `_client` was never recreated when `GITHUB_TOKEN` changed at runtime (e.g. after user sets token in interactive menu); now compares token and recreates if changed
-- **FIX** Secondary rate limit (abuse detection) on HTTP 403 with `Retry-After` header now correctly retried
-- **NEW** `resetClient()` exported for programmatic reset after token changes
-
-#### Validator (`src/validator/index.js`)
-- **FIX** Stripe `402 Payment Required` now correctly returns `VALID` (test key hitting live endpoint limit)
-- **FIX** Discord validator used `Bot` prefix for all tokens; user tokens (`xoxp-` style, short tokens) now use `Bearer` prefix
-- **FIX** AWS validator crashed with unhandled exception if `@aws-sdk/client-sts` not installed; now returns `SKIPPED` with install instructions
-- **NEW** HuggingFace validator (`/api/whoami-v2`)
-- **NEW** Linear validator (GraphQL `viewer` query)
-- **NEW** GitLab validator (`/api/v4/user`)
-
-#### Config Store (`src/cli/config-store.js`)
-- **FIX** After saving token/notifications/DB settings in the interactive menu, singletons (GitHub client, notifier, DB) were not reloaded — new settings only took effect after restart
-- **NEW** `reloadSingletons()` — resets GitHub client, notifier, and DB after config changes; called automatically by menu on save
-
-### 🆕 New Features
-- **NEW** `src/validator/index.js` — HuggingFace, Linear, GitLab validators (3 new providers)
-- **NEW** `resetClient()`, `resetDB()`, `resetNotifier()` — hot-reload exports for runtime config changes
-- **NEW** `CHANGELOG.md` — this file
+### Updated
+- `install-termux.sh` — adds aliases to `~/.bashrc` (duplicate-safe)
+- `README.md` — Termux section rewritten with numbered steps and
+  common mistakes table
 
 ---
 
-## [2.0.0] — 2026-04-20 — Day 1–5 Full Build
+## [2.2.2] — 2026-04-20 — Silence better-sqlite3 binding warning on Termux
 
-- Full project scaffold (Phase 1–14)
-- Real-time GitHub Events poller with ETag + X-Poll-Interval
-- AI repo detector (20+ signals)
-- Surface scanner (100+ patterns + entropy)
-- Git history deep scan (all branches, diffs, dangling commits)
+### Fixed
+- `better-sqlite3` binding error was logged as `WARN` on Termux Android,
+  even though `sql.js` fallback worked correctly
+- Demoted to `debug` level — silent unless `LOG_LEVEL=debug`
+- No functional change — scanning, DB, vault all worked before and after
+
+---
+
+## [2.2.1] — 2026-04-20 — Fix Termux npm install failure (better-sqlite3)
+
+### Problem
+`better-sqlite3` requires Android NDK (`android_ndk_path`) for native
+compilation. Termux doesn't have it, causing `npm install` to fail entirely.
+
+### Fixed
+- `src/db/sqlite.js` — dual-driver architecture:
+  - `better-sqlite3` (native C++, fast) — Linux / macOS / Windows
+  - `sql.js` (pure WebAssembly, zero compilation) — Termux / Android / CI
+  - Auto-detects which driver is available at startup
+  - Both implement identical API — transparent to the rest of the app
+  - `SqlJsDB` auto-saves to disk every 60s and on process exit
+- `package.json` — `better-sqlite3` moved to `optionalDependencies`
+  (npm skips it gracefully when native build fails)
+- `.npmrc` — `optional=true` ensures optional dep failures are non-fatal
+- `install-termux.sh` — uses `npm install --ignore-scripts` to skip
+  all native builds; verifies `sql.js` loads correctly
+
+### DB priority chain
+```
+PostgreSQL (DATABASE_URL set)
+  → SQLite via better-sqlite3 (native, desktop)
+  → SQLite via sql.js (WASM, Termux/Android/CI)
+  → JSONL flat-file (zero deps, always works)
+```
+
+---
+
+## [2.2.0] — 2026-04-20 — 6 new features
+
+### Added
+
+**1. Encrypted Secret Vault** (`src/db/vault.js`)
+- VALID secrets saved to `data/vault.enc.jsonl`
+- AES-256-GCM encryption, PBKDF2 key derivation (100 000 iterations)
+- Set `VAULT_PASSWORD` env var to enable encryption
+- `vault.save()`, `vault.list(pw)`, `vault.export(pw, path)`
+- Menu: Secret Vault → View / Set password / Export to JSON
+- Worker automatically saves every VALID finding to vault
+
+**2. SQLite Database** (`src/db/sqlite.js`)
+- `better-sqlite3` (native) or `sql.js` (WASM) — auto-selected
+- WAL mode for safe concurrent writes
+- Replaces JSONL as default local backend
+- `SQLITE_PATH` env var overrides file location
+
+**3. GitHub Blame** (`src/scanner/blame.js`)
+- Fetches who committed the secret via GitHub GraphQL blame API
+- Returns: author name, email, GitHub login, commit SHA, date
+- Called only for VALID findings (saves API quota)
+- Shown in logs and notification payloads
+
+**4. GitHub Gist Scanner** (`src/scanner/gist-scanner.js`)
+- Scans public GitHub Gists for exposed credentials
+- Same 100+ patterns + entropy as repo scanner
+- Auto-runs every 15 min when GitHub token is configured
+- `scanPublicGists(pages)` and `scanUserGists(username)`
+- Accessible from menu → Scan GitHub Gists
+
+**5. Allowlist / Denylist** (`src/utils/allowlist.js`)
+- `data/allowlist.json` — repos/orgs to always skip
+- `data/denylist.json` — repos/orgs to always force-scan
+- Worker checks allowlist before queuing every polled event
+- Menu: Allowlist / Denylist → Add / Remove / View
+
+**6. Per-provider Revocation Guides** (`src/scanner/revocation-guide.js`)
+- Step-by-step instructions for 16 providers: OpenAI, Anthropic,
+  GitHub, Stripe, AWS, Slack, SendGrid, Telegram, Discord, NPM,
+  Heroku, Mailgun, Shopify, HuggingFace, Linear, GitLab
+- Each guide includes severity, impact, action steps, direct URL
+- Printed on every VALID finding in logs
+- Included in Markdown reports
+
+### Updated
+- `package.json` bumped to v2.2.0
+- `README.md` fully rewritten — tables, clear sections, Termux instructions
+
+---
+
+## [2.1.4] — 2026-04-20 — Termux-safe log formatter + streaming validation
+
+### Added
+
+**Compact Termux-safe log output** (`src/utils/logger.js`)
+- All console lines truncated to terminal width (78 cols on Termux)
+- `[Finding]` lines → compact single-row format: `FIND repo | pattern | file STATUS`
+- `[Scanner]` findings count → `SCAN repo  N findings` (color-coded)
+- `LIVE SECRET` → full-width red banner (never truncated)
+- `HIGH-CONF PAIR` → yellow `PAIR` prefix, single line
+- Short 4-char level labels: `INFO` `WARN` `ERRO` `DBUG`
+- File transport still gets full untruncated output
+
+**Streaming real-time validation** (`src/validator/stream-validator.js`)
+- Named-pattern secrets (OpenAI, GitHub, Stripe, etc.) validated
+  **immediately** mid-scan — don't wait for repo scan to finish
+- 25 providers in `HIGH_VALUE_PATTERNS` set trigger instant validation
+- AWS key + secret buffered until both found, then pair-validated
+- Entropy-only `unknown` strings batched for end-of-scan
+- Max 3 concurrent validations in flight
+- On VALID: DB insert + notification + SSE broadcast fire instantly
+- Scan continues after VALID hit — finds all secrets in the repo
+
+---
+
+## [2.1.3] — 2026-04-20 — Fix MaxListeners + 500-finding noise flood
+
+### Fixed
+- **`MaxListenersExceededWarning`** — previous fix targeted wrong object.
+  Root cause: `https.globalAgent` TLSSocket has its own listener count.
+  Now sets all three targets:
+  `EventEmitter.defaultMaxListeners = 200`,
+  `https.globalAgent.setMaxListeners(200)`,
+  `http.globalAgent.setMaxListeners(200)`
+
+- **500+ findings on single repos** (e.g. `qingfeng1910/TV-update`)
+  - Entropy threshold raised `4.0` → `4.5`
+  - `isLikelyNoise()` added: rejects npm `sha512-` hashes, hex checksums,
+    UUIDs, long base64 blobs, pure numeric strings
+  - `maxFindingsPerRepo: 100` cap — noisy repos log a warning and stop
+  - `isNoisyValue()` wired into engine, history scanner, false-positive filter
+
+---
+
+## [2.1.2] — 2026-04-20 — Fix 4 runtime bugs from live scan output
+
+### Fixed
+- **Lock file flooding** (`package-lock.json`, `pnpm-lock.yaml`, etc.)
+  — added `SKIP_FILENAMES` set with exact basename match (13 lock files)
+  — also added minified/bundled/TypeScript declaration file patterns
+- **Twilio pair alert spamming 19×** — one alert per unique
+  `pairName + filePath` combination per scan (was per-finding)
+- **`MaxListenersExceededWarning`** — raised to 30
+  _(note: fully fixed in v2.1.3)_
+- **Menu wraps back to top** — `loop: false` on all 8 list prompts
+
+---
+
+## [2.1.1] — 2026-04-20 — Termux UI/UX overhaul
+
+### Fixed
+- Banner rewritten as ASCII `+===+` box (emoji broke border alignment on Termux fonts)
+- Menu choice labels kept ≤ 52 chars (no line wrapping on 80-col terminal)
+- Removed inline trailing `chalk.gray()` hints from choice lines (caused overlap)
+- All result tables rebuilt with `printTable()` helper (fixed column widths ≤ 78 chars)
+- `TERM_WIDTH` auto-detection capped at 78
+- Separators consistently 52 chars throughout
+- `npm start` now correctly launches the interactive CLI menu
+- `reloadSingletons()` called after every config save (no restart needed)
+
+---
+
+## [2.1.0] — 2026-04-20 — Full security audit + bug fix release
+
+### Security Fixes
+- Telegram validator: sanitize token before URL embedding (path injection)
+- `rawValue` never appears in logs or error messages (redacted only)
+- `validateStatus: () => true` — no silent redirect following
+
+### Bug Fixes (18 total across 6 files)
+- `scanner/engine`: regex `lastIndex` carry-over (missed matches)
+- `scanner/engine`: `tokenRegex` shared across iterations (missed tokens)
+- `scanner/engine`: raw file URL inherited wrong `baseURL`
+- `scanner/engine`: truncated trees (>100k blobs) silently returned partial
+- `scanner/engine`: `scannedHashes` module-level → cross-scan contamination
+- `history`: `scannedCommits/Blobs` same module-level bug
+- `history`: `+++` diff header lines included in scan text
+- `history`: `maxCommitsPerBranch` cap not enforced
+- `history`: dangling commits scanned multiple times
+- `db/jsonl`: `upsertRepo` appended unboundedly — file growth
+- `db/jsonl`: bad JSONL lines silently swallowed
+- `db/postgres`: pool never closed on exit
+- `db`: `getStats()` missing `topProviders` field
+- `notifications`: rate limit window never reset
+- `notifications`: Telegram messages >4096 chars → API 400
+- `notifications`: Discord empty embed field value → API 400
+- `validator`: Stripe 402 treated as INVALID (it means key is valid)
+- `validator`: Discord `Bot` prefix used for user tokens
+
+### Added
+- HuggingFace, Linear, GitLab validators (3 new providers)
+- `resetClient()`, `resetDB()`, `resetNotifier()` — hot-reload after config change
+- `reloadSingletons()` in config-store — settings apply without restart
+
+---
+
+## [2.0.0] — 2026-04-20 — Day 1–5 complete build
+
+### Added (full system)
+- Real-time GitHub Events poller (ETag + X-Poll-Interval)
+- AI repo detector (20+ signals: `.cursorrules`, `CLAUDE.md`, bolt.new, Lovable, v0.dev...)
+- Surface scanner: 100+ provider patterns + Shannon entropy ≥ 4.5
+- Git history deep scan: all branches, diffs, dangling commits
 - Secret pair matcher + context analyzer
-- Validation engine (12 providers)
+- Validation engine: 12 providers
 - PostgreSQL + JSONL flat-file database
 - Discord / Slack / Telegram / Webhook notifications
 - JSON / Markdown / CSV / SARIF reports
 - Express REST API + SSE live web dashboard
 - GitHub Code Search proactive scanner
-- Interactive TUI menu (arrow-key, works on Termux/Android)
+- Interactive TUI menu (arrow-key, Termux/Android safe)
 - Persistent config store (no `.env` required)
-- Full cross-platform support: Linux · macOS · Windows · Android Termux
+- Full cross-platform: Linux · macOS · Windows · Android Termux
