@@ -2,6 +2,18 @@
 
 All notable changes are documented here.
 
+## [2.2.0] — 2026-04-20 — cleanup test file
+
+**Type:** 🔧 Chore  
+**Commit:** `6cb3477`  
+
+
+
+### Files Changed
+
+- **Other**: `.heal_test_push`
+
+---
 ## [2.2.0] — 2026-04-20 — verify autonomous push works
 
 **Type:** 🧪 Tests  
