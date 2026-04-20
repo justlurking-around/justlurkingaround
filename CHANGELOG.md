@@ -2,6 +2,42 @@
 
 All notable changes are documented here.
 
+## [2.2.0] — 2026-04-20 — clean deployment system with pre-push sanitization
+
+**Type:** ✨ Added  
+**Commit:** `16cae97`  
+
+**Tags:** Database · Vault/Encryption · SSH/Private Keys · Credentials · False Positive Reduction · Detection Patterns
+
+### Details
+
+  scripts/sanitize.js — Pre-deploy sanitizer:
+  1. Credential scan: scans ALL tracked files for real API keys,
+  tokens, private keys. Smart enough to skip detection regex
+  patterns (e.g. -----BEGIN RSA in patterns.js is a scanner
+  rule, not a real key). Blocks push on any real credential found.
+  2. Staged files check: blocks sensitive files from being committed
+  (vault.enc.jsonl, scanner.db, health.json, heal.pid, .env, logs)
+  auto-unstages them with --fix flag
+  3. .env.defaults cleanliness: ensures only empty/safe values.
+- Strips inline comments before parsing (KEY=value # comment).
+- Whitelists: booleans, numbers, log levels, relative paths,
+  localhost URLs, durations (1800000ms, 50MB etc)
+  4. package.json: checks for _authToken, embedded secrets in scripts
+  5. .gitignore completeness: verifies all 7 critical exclusions present
+  6. Remote URL: confirms .git/config not tracked (token is local-only)
+  7. Writes data/sanitize-report.json after every run
+  npm scripts:
+  npm run sanitize       # check and report
+  npm run sanitize:fix   # check + auto-fix (unstage, clear values)
+  npm run predeploy      # strict mode (exit 1 on any finding)
+
+### Files Changed
+
+- **Dependencies**: `package.json`
+- **Scripts**: `install-hooks.js`, `sanitize.js`
+
+---
 ## [2.2.0] — 2026-04-20 — audit findings — 4 real bugs fixed, 10 false positives cleared
 
 **Type:** 🐛 Fixed  
