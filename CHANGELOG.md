@@ -2,6 +2,45 @@
 
 All notable changes are documented here.
 
+## [2.2.0] — 2026-04-20 — autonomous self-healing system (scripts/heal.js)
+
+**Type:** ✨ Added  
+**Commit:** `a7536f9`  
+
+**Tags:** Database · Gist Scanner
+
+### Details
+
+- No external AI — pure logic, npm, git, and fs.
+- Heal cycle (every 30min by default):
+  1. Dependency audit: npm audit --json, auto-fix non-breaking vulns
+  2. Outdated check: patch/minor auto-update, major bumps logged only
+  3. Deprecated detection: npm registry check every 6h
+  4. Runtime error monitor: tails scanner.log, auto-fixes known errors
+- SQLite corruption: backup + recreate
+- Disk full: truncate logs to last 500 lines
+- Memory pressure: flag + status update
+- Network errors: log and let retry logic handle
+  5. Disk/log health: prune JSONL >10k lines, rotate logs >50MB
+  6. Process watchdog: restart worker on crash (exp backoff, 5/hr max)
+  7. Self-update: git fetch, optional git pull (AUTO_UPDATE=true)
+  8. Health report: writes data/health.json after every cycle
+  npm scripts added:
+  npm run heal           # run one heal cycle + daemon
+  npm run heal:watch     # heal + watchdog (restarts worker on crash)
+  npm run heal:dry       # read-only audit (no changes made)
+  start.sh: launches heal daemon in background automatically
+- Set DISABLE_HEAL=true to skip
+
+### Files Changed
+
+- **Config**: `.env.defaults`
+- **Dependencies**: `package.json`
+- **Scripts**: `heal.js`
+- **API / Dashboard**: `server.js`
+- **Termux / Scripts**: `start.sh`
+
+---
 ## [2.2.0] — 2026-04-20 — auto-changelog system + git hooks
 
 **Type:** ✨ Added  
