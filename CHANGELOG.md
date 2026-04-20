@@ -2,6 +2,25 @@
 
 All notable changes are documented here.
 
+## [2.2.0] — 2026-04-20 — auto-changelog system + git hooks
+
+**Type:** ✨ Added  
+**Commit:** `ad6c226`  
+
+
+
+### Details
+
+- Adds scripts/update-changelog.js and scripts/install-hooks.js
+- Wires into post-commit and pre-push git hooks
+
+### Files Changed
+
+- **Documentation**: `CHANGELOG.md`
+- **Dependencies**: `package.json`
+- **Scripts**: `install-hooks.js`, `update-changelog.js`
+
+---
 ## [2.3.0] — 2026-04-20 — Credential scanning: DB passwords, SMTP, SSH keys, JWT, K8s secrets
 
 **Type:** 🚀 Release  
