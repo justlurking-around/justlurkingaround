@@ -39,7 +39,6 @@
     "cheerio": "^1.0.0",
     "commander": "^11.0.0",
     "configstore": "^8.0.0",
-    "crypto": "^1.0.1",
     "dotenv": "^16.0.0",
     "express": "^5.2.1",
     "inquirer": "^8.2.7",
