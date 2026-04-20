@@ -73,10 +73,14 @@ class EventsPoller extends EventEmitter {
     }
     const serverPollInterval = response.headers['x-poll-interval'];
     if (serverPollInterval) {
-      const ms = parseInt(serverPollInterval) * 1000;
-      if (ms !== this.pollInterval) {
-        logger.debug(`[Poller] Server requested poll interval: ${serverPollInterval}s`);
-        this.pollInterval = ms;
+      const parsed = parseInt(serverPollInterval, 10);
+      // Guard against NaN — only apply if valid positive integer
+      if (!isNaN(parsed) && parsed > 0) {
+        const ms = parsed * 1000;
+        if (ms !== this.pollInterval) {
+          logger.debug(`[Poller] Server requested poll interval: ${serverPollInterval}s`);
+          this.pollInterval = ms;
+        }
       }
     }
 

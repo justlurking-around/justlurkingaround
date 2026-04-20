@@ -18,7 +18,11 @@ const path   = require('path');
 const fs     = require('fs');
 const logger = require('../utils/logger');
 
-const DB_PATH = process.env.SQLITE_PATH || path.resolve('./data/scanner.db');
+// DB_PATH resolved per-instance (not module-level) so SQLITE_PATH env var
+// set after require() is respected correctly
+function getDbPath() {
+  return process.env.SQLITE_PATH || path.resolve('./data/scanner.db');
+}
 
 // ─── Detect which SQLite driver is available ──────────────────────────────────
 
@@ -52,6 +56,7 @@ class BetterSQLiteDB {
   constructor() { this._db = null; }
 
   async migrate() {
+    const DB_PATH = getDbPath();
     const dir = path.dirname(DB_PATH);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     const Database = require('better-sqlite3');
@@ -138,6 +143,7 @@ class SqlJsDB {
   constructor() { this._db = null; this._dirty = false; }
 
   async migrate() {
+    const DB_PATH = getDbPath();
     const dir = path.dirname(DB_PATH);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
@@ -168,8 +174,7 @@ class SqlJsDB {
     try {
       const data = this._db.export();
       if (!data || data.length === 0) return;
-      // Use the instance path, not the module-level constant
-      const dbPath = process.env.SQLITE_PATH || path.resolve('./data/scanner.db');
+      const dbPath = getDbPath();
       fs.writeFileSync(dbPath, Buffer.from(data));
       this._dirty = false;
     } catch (err) {

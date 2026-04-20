@@ -26,7 +26,8 @@ const fss  = require('fs');
 
 const ROOT      = path.resolve(__dirname, '..');
 const CHANGELOG = path.join(ROOT, 'CHANGELOG.md');
-const PKG       = JSON.parse(fss.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+let PKG = { version: '0.0.0' };
+try { PKG = JSON.parse(fss.readFileSync(path.join(ROOT, 'package.json'), 'utf8')); } catch {}
 
 // ── CLI args ──────────────────────────────────────────────────────────────────
 

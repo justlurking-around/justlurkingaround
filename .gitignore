@@ -5,5 +5,9 @@ logs/
 data/
 *.log
 *.jsonl
+*.db
+*.db-shm
+*.db-wal
 .DS_Store
 Thumbs.db
+.heal_test_push
