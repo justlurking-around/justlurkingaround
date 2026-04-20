@@ -185,4 +185,16 @@ function isHighValueFile(filePath) {
   return false;
 }
 
-module.exports = { shouldSkipFile, isDummyValue, isHighValueFile, SKIP_PATH_PATTERNS, SKIP_FILENAMES };
+/**
+ * Extra noise check — rejects checksums, UUIDs, hex hashes, npm integrity
+ * values that look high-entropy but are not secrets.
+ */
+function isNoisyValue(value) {
+  if (!value) return false;
+  try {
+    const { isLikelyNoise } = require('../utils/entropy');
+    return isLikelyNoise(value);
+  } catch { return false; }
+}
+
+module.exports = { shouldSkipFile, isDummyValue, isHighValueFile, isNoisyValue, SKIP_PATH_PATTERNS, SKIP_FILENAMES };

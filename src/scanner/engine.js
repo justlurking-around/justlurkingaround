@@ -17,7 +17,7 @@ const pLimit = require('p-limit');
 const { getClient } = require('../utils/github-client');
 const { shannonEntropy, isHighEntropy } = require('../utils/entropy');
 const { fileHash } = require('../utils/hash');
-const { shouldSkipFile, isDummyValue, isHighValueFile } = require('../filters/false-positive');
+const { shouldSkipFile, isDummyValue, isHighValueFile, isNoisyValue } = require('../filters/false-positive');
 const { PATTERNS } = require('./patterns');
 const config = require('../../config/default');
 const logger = require('../utils/logger');
@@ -75,12 +75,20 @@ class ScannerEngine {
     ];
 
     const findings = [];
+    const maxFindings = config.scanner.maxFindingsPerRepo || 100;
+
     await Promise.all(
       ordered.map(file =>
         this.fileLimit(async () => {
+          // Stop scanning files once cap is hit
+          if (findings.length >= maxFindings) return;
           try {
             const result = await this._scanFile(repoName, file);
-            if (result.length > 0) findings.push(...result);
+            if (result.length > 0) {
+              // Slice to cap — don't overflow
+              const remaining = maxFindings - findings.length;
+              findings.push(...result.slice(0, remaining));
+            }
           } catch (err) {
             logger.debug(`[Scanner] File error ${file.path}: ${err.message}`);
           }
@@ -88,6 +96,9 @@ class ScannerEngine {
       )
     );
 
+    if (findings.length >= maxFindings) {
+      logger.warn(`[Scanner] ${repoName} — hit cap of ${maxFindings} findings (noisy repo, truncated)`);
+    }
     logger.info(`[Scanner] ${repoName} — ${findings.length} findings`);
     return findings;
   }
@@ -188,7 +199,8 @@ class ScannerEngine {
       }
 
       const value = rawValue.trim();
-      if (isDummyValue(value)) { if (match.index === regex.lastIndex) regex.lastIndex++; continue; }
+      if (isDummyValue(value))  { if (match.index === regex.lastIndex) regex.lastIndex++; continue; }
+      if (isNoisyValue(value))   { if (match.index === regex.lastIndex) regex.lastIndex++; continue; }
       if (value.length < (config.scanner.minSecretLength || 16)) { if (match.index === regex.lastIndex) regex.lastIndex++; continue; }
 
       const entropy = shannonEntropy(value);
@@ -223,7 +235,8 @@ class ScannerEngine {
       while ((m = tokenRe.exec(line)) !== null) {
         const token = m[1];
         if (!isHighEntropy(token, threshold)) continue;
-        if (isDummyValue(token)) continue;
+        if (isDummyValue(token))  continue;
+        if (isNoisyValue(token))  continue;
         // FIX: use pre-compiled patterns array (perf)
         if (_compiledPatterns.some(re => re.test(token))) continue;
 

@@ -17,11 +17,12 @@ module.exports = {
     maxFilesPerRepo: 200
   },
   scanner: {
-    entropyThreshold: 4.0,
+    entropyThreshold: 4.5,      // raised from 4.0 — reduces noise from checksums/UUIDs
     minSecretLength: 16,
     maxSecretLength: 512,
     concurrentRepos: 3,
-    concurrentFiles: 5
+    concurrentFiles: 5,
+    maxFindingsPerRepo: 100     // cap per-repo findings before validation (noise guard)
   },
   queue: {
     useRedis: process.env.USE_REDIS === 'true',

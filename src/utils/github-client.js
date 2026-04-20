@@ -6,9 +6,15 @@
  *      axios-rate-limit attaches per-request socket listeners
  */
 
-// FIX: raise max listeners BEFORE requiring axios to prevent
-// "Possible EventEmitter memory leak" warnings on concurrent scans
-require('events').EventEmitter.defaultMaxListeners = 30;
+// FIX: raise max listeners on BOTH EventEmitter default AND the global
+// https/http agents — TLSSocket inherits from the agent, so the warning
+// originates there. Formula: concurrentRepos(3) * concurrentFiles(5) *
+// retries(3) * interceptors(4) = 180 → use 200 for safety.
+require('events').EventEmitter.defaultMaxListeners = 200;
+const _https = require('https');
+const _http  = require('http');
+_https.globalAgent.setMaxListeners(200);
+_http.globalAgent.setMaxListeners(200);
 
 const axios = require('axios');
 const axiosRetry = require('axios-retry').default || require('axios-retry');

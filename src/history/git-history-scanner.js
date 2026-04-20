@@ -14,7 +14,7 @@
  */
 
 const { getClient } = require('../utils/github-client');
-const { shouldSkipFile, isDummyValue } = require('../filters/false-positive');
+const { shouldSkipFile, isDummyValue, isNoisyValue } = require('../filters/false-positive');
 const { PATTERNS } = require('../scanner/patterns');
 const { shannonEntropy, isHighEntropy } = require('../utils/entropy');
 const config = require('../../config/default');
@@ -199,7 +199,7 @@ class GitHistoryScanner {
         const rawValue = pattern.group === 0 ? m[0] : (m[pattern.group] || m[0]);
         if (!rawValue) { if (m.index === regex.lastIndex) regex.lastIndex++; continue; }
         const value = rawValue.trim();
-        if (isDummyValue(value) || value.length < 16) { if (m.index === regex.lastIndex) regex.lastIndex++; continue; }
+        if (isDummyValue(value) || isNoisyValue(value) || value.length < 16) { if (m.index === regex.lastIndex) regex.lastIndex++; continue; }
         findings.push({
           patternId:    pattern.id,
           patternName:  pattern.name,
@@ -220,8 +220,9 @@ class GitHistoryScanner {
     let m2;
     while ((m2 = tokenRe.exec(text)) !== null) {
       const token = m2[1];
-      if (!isHighEntropy(token, config.scanner.entropyThreshold || 4.0)) continue;
-      if (isDummyValue(token)) continue;
+      if (!isHighEntropy(token, config.scanner.entropyThreshold || 4.5)) continue;
+      if (isDummyValue(token))  continue;
+      if (isNoisyValue(token))  continue;
       if (_compiledPatterns.some(re => re.test(token))) continue;
       findings.push({
         patternId: 'entropy', patternName: 'High-Entropy (History)', provider: 'unknown',
