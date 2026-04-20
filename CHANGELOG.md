@@ -2,6 +2,36 @@
 
 All notable changes are documented here.
 
+## [2.2.0] — 2026-04-20 — self-healing system v2 — fully working autonomous git push
+
+**Type:** 🐛 Fixed  
+**Commit:** `4ceeb6c`  
+
+**Tags:** Termux/Android
+
+### Details
+
+- BUGS FIXED:
+- npm audit fix: now commits package-lock.json + git pushes changes
+- npm update: now commits package files + git pushes changes
+- deprecated check: filter npm warnings before parsing output
+- heal daemon: exits cleanly after one cycle (WATCH_PROCESS=false)
+- start.sh: nohup+disown so daemon survives terminal close on Termux
+- Stores PID in data/.heal.pid (kills stale daemon on restart)
+- process watchdog: uses spawn with stdio:inherit (proper output)
+- VERIFIED WORKING:
+- npm audit: clean (0 vulns)
+- outdated: all current
+- deprecated: correctly detected crypto as deprecated
+- git push: autonomous commit+push confirmed working
+- one-shot mode exits cleanly (code 0)
+
+### Files Changed
+
+- **Scripts**: `heal.js`
+- **Termux / Scripts**: `start.sh`
+
+---
 ## [2.2.0] — 2026-04-20 — cleanup test file
 
 **Type:** 🔧 Chore  
