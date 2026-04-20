@@ -81,28 +81,58 @@ The **first-run wizard** opens automatically. Add your GitHub token and you're r
 Or download directly: [github.com/termux/termux-app/releases](https://github.com/termux/termux-app/releases)
 → pick `termux-app_v*.apk` (arm64-v8a for most phones)
 
-### Setup
+### First-time setup (do this once)
 
 ```bash
-# First-time setup
+# 1. Update packages and install dependencies
 pkg update -y && pkg upgrade -y
 pkg install nodejs git -y
 
-# Clone
+# 2. Clone the repo
 git clone https://github.com/justlurking-around/justlurkingaround.git
+
+# 3. Go into the folder
 cd justlurkingaround
 
-# Use the Termux install script (handles native deps automatically)
+# 4. Run the Termux setup script (handles everything)
 bash install-termux.sh
 
-# Start
-npm start
+# 5. Reload shell so the shortcuts work
+source ~/.bashrc
 ```
 
-> **Why use `install-termux.sh`?**
-> The package `better-sqlite3` requires native C++ compilation which fails on Android.
-> The script uses `--ignore-scripts` and the scanner automatically falls back to
-> **sql.js** (pure WebAssembly SQLite — no compilation needed, works everywhere).
+### How to start (after setup)
+
+```bash
+# From the project folder:
+cd ~/justlurkingaround && npm start
+
+# OR from ANY directory (shortcut added by install-termux.sh):
+scanner
+```
+
+### How to update
+
+```bash
+# From the project folder:
+cd ~/justlurkingaround && bash update.sh
+
+# OR from anywhere:
+scanner-update
+```
+
+### Common mistakes
+
+| Error | Fix |
+|-------|-----|
+| `fatal: not a git repository` | You're in the wrong folder. Run `cd ~/justlurkingaround` first |
+| `Cannot find package.json` | Same — run `cd ~/justlurkingaround` first |
+| `npm install` fails with gyp error | Use `bash install-termux.sh` not plain `npm install` |
+
+> **Why `install-termux.sh` and not plain `npm install`?**
+> `better-sqlite3` requires Android NDK to compile — Termux doesn't have it.
+> The script runs `npm install --ignore-scripts` and the scanner automatically
+> uses **sql.js** (pure WebAssembly SQLite — no compilation, works everywhere).
 
 ### Termux Tips
 
