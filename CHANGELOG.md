@@ -1,10 +1,44 @@
 # Changelog
 
-All notable changes are documented here in reverse chronological order.
-Format: `[version] — date — summary`
+All notable changes are documented here.
+
+## [2.3.0] — 2026-04-20 — Credential scanning: DB passwords, SMTP, SSH keys, JWT, K8s secrets
+
+**Type:** 🚀 Release  
+**Commit:** `41c697e`  
+
+**Tags:** Database · Vault/Encryption · SMTP/Email · SSH/Private Keys · JWT · Kubernetes
+
+### Details
+
+- NEW: src/scanner/credential-patterns.js (24 new patterns)
+- Credential types detected:
+- Database connections: MySQL, PostgreSQL, MongoDB, Redis, MSSQL
+  (full connection strings with embedded credentials)
+- SMTP / email: smtp:// URLs, SMTP_PASSWORD env vars, user+pass pairs
+- Private keys: RSA, EC, OpenSSH, PKCS#8 (full PEM block detection)
+- JWT signing secrets (JWT_SECRET, signing_secret env vars)
+- Generic passwords: DB_PASSWORD, ADMIN_PASSWORD, ROOT_PASSWORD
+- HTTP Basic Auth headers (base64 encoded)
+- .htpasswd credential entries (Apache password files)
+- GCP Service Account JSON files (full file detection)
+- AWS credentials file format (~/.aws/credentials)
+- Docker registry auth tokens (docker config.json)
+- Kubernetes Secret manifests (base64 encoded data fields)
+- FTP/SFTP connection strings with credentials
+- Encryption keys (AES_KEY, ENCRYPTION_KEY, CIPHER_KEY)
+- .env SECRET_KEY entries
+- NEW: src/validator/credential-validator.js
+- Live validators (non-destructive probes only):
+- MySQL: createConnection() + immediate disconnect (3-5s timeout)
+
+### Files Changed
+
+- **Dependencies**: `package-lock.json`, `package.json`
+- **Scanner**: `credential-patterns.js`, `engine.js`, `revocation-guide.js`
+- **Validator**: `credential-validator.js`, `stream-validator.js`
 
 ---
-
 ## [2.2.3] — 2026-04-20 — Fix wrong-directory user error
 
 ### Problem

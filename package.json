@@ -11,7 +11,10 @@
     "worker": "node src/worker/index.js",
     "cli": "node src/cli/index.js",
     "menu": "node src/cli/index.js",
-    "setup-db": "node src/db/migrate.js"
+    "setup-db": "node src/db/migrate.js",
+    "changelog": "node scripts/update-changelog.js",
+    "changelog:dry": "node scripts/update-changelog.js --dry-run",
+    "prepare": "node scripts/install-hooks.js || true"
   },
   "keywords": [
     "security",
