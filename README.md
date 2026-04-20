@@ -88,14 +88,21 @@ Or download directly: [github.com/termux/termux-app/releases](https://github.com
 pkg update -y && pkg upgrade -y
 pkg install nodejs git -y
 
-# Clone and install
+# Clone
 git clone https://github.com/justlurking-around/justlurkingaround.git
 cd justlurkingaround
-npm install
 
-# Start interactive menu
+# Use the Termux install script (handles native deps automatically)
+bash install-termux.sh
+
+# Start
 npm start
 ```
+
+> **Why use `install-termux.sh`?**
+> The package `better-sqlite3` requires native C++ compilation which fails on Android.
+> The script uses `--ignore-scripts` and the scanner automatically falls back to
+> **sql.js** (pure WebAssembly SQLite — no compilation needed, works everywhere).
 
 ### Termux Tips
 

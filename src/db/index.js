@@ -308,17 +308,20 @@ async function getDB() {
     }
   }
 
-  // 2. Try SQLite (preferred local backend — fast, zero-config, Termux-safe)
+  // 2. Try SQLite (better-sqlite3 native OR sql.js WASM — Termux-safe)
   if (process.env.USE_JSONL !== 'true') {
     try {
-      const SQLiteDB = require('./sqlite');
-      const sqlite = new SQLiteDB();
-      await sqlite.migrate();
-      _db = sqlite;
-      logger.info('[DB] Using SQLite');
-      return _db;
+      const { createSQLiteDB, DRIVER } = require('./sqlite');
+      if (DRIVER) {
+        const sqlite = await createSQLiteDB();
+        if (sqlite) {
+          _db = sqlite;
+          logger.info(`[DB] Using SQLite (${DRIVER})`);
+          return _db;
+        }
+      }
     } catch (err) {
-      logger.warn(`[DB] SQLite unavailable (${err.message}) — falling back to JSONL`);
+      logger.warn(`[DB] SQLite error (${err.message}) — falling back to JSONL`);
     }
   }
 
