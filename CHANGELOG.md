@@ -2,6 +2,23 @@
 
 All notable changes are documented here.
 
+## [2.2.0] — 2026-04-20 — heal daemon + security hardening
+
+**Type:** 🐛 Fixed  
+**Commit:** `36fdde3`  
+
+**Tags:** Security
+
+### Files Changed
+
+- **Scripts**: `heal.js`
+- **API / Dashboard**: `server.js`
+- **CLI / Menu**: `index.js`
+- **Utilities**: `security.js`
+- **Validator**: `index.js`
+- **Termux / Scripts**: `start.sh`
+
+---
 ## [2.2.0] — 2026-04-20 — cleanup heal test
 
 **Type:** 🔧 Chore  
