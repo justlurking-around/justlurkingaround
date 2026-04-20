@@ -27,8 +27,11 @@ function detectDriver() {
   try {
     require('better-sqlite3');
     return 'better-sqlite3';
-  } catch {}
-  // Try WASM (Termux-safe)
+  } catch {
+    // Expected on Termux/Android — sql.js WASM used instead (debug only, not a problem)
+    logger.debug('[SQLite] better-sqlite3 not available, using sql.js WASM fallback');
+  }
+  // Try WASM (Termux-safe, zero native deps)
   try {
     require('sql.js');
     return 'sql.js';

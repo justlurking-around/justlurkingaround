@@ -321,7 +321,7 @@ async function getDB() {
         }
       }
     } catch (err) {
-      logger.warn(`[DB] SQLite error (${err.message}) — falling back to JSONL`);
+      logger.debug(`[DB] SQLite unavailable (${err.message}) — falling back to JSONL`);
     }
   }
 
